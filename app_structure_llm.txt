@@ -1,0 +1,125 @@
+fatture-cli — project structure for LLM context
+================================================
+
+Purpose
+-------
+A Python CLI (`fatture`) wrapping the Fatture in Cloud REST API v2. Designed to
+be consumed by both humans (compact pretty-print) and AI agents (NDJSON via
+`--json`). OAuth2 Authorization Code flow with refresh-token rotation.
+
+Top-level layout
+----------------
+fatture-cli/
+├── CLAUDE.md                # Project-specific instructions for Claude Code
+├── README.md                # User documentation
+├── LICENSE                  # MIT
+├── Makefile                 # install / dev / test / lint / clean
+├── pyproject.toml           # hatchling build, deps, entry point
+├── .gitignore               # Python + credentials + .env
+├── app_structure_llm.txt    # This file
+├── skills/
+│   ├── install.sh           # Copies the skill to ~/.config/mayai-cli/skills/
+│   └── fatture-cli.md       # Agent-facing usage guide
+├── fatture_cli/             # Python package — main code lives here
+│   ├── __init__.py          # Exposes __version__
+│   ├── main.py              # Click entry point; registers all commands
+│   ├── api/
+│   │   ├── __init__.py      # Re-exports APIClient, APIError
+│   │   ├── client.py        # httpx-based client with bearer auth + refresh
+│   │   └── endpoints.py     # URL constants + DEFAULT_SCOPES
+│   ├── auth/
+│   │   ├── __init__.py      # Re-exports load/save/delete credentials
+│   │   └── oauth.py         # OAuth2 flow + Credentials dataclass + storage
+│   ├── models/
+│   │   └── __init__.py      # Reserved for typed models (currently unused)
+│   └── output/
+│       ├── __init__.py      # Re-exports emit / error
+│       └── formatter.py     # NDJSON + human pretty-print, strips empties
+└── tests/                   # pytest tests (placeholder)
+
+Entry point
+-----------
+`fatture_cli.main:cli` (registered as `fatture` in pyproject.toml).
+
+Command tree
+------------
+fatture
+├── auth
+│   ├── login    --client-id ID --client-secret SECRET [--no-browser] [--port P]
+│   ├── status
+│   └── logout
+├── list
+│   ├── invoices [--year Y] [--status S] [--limit N]
+│   ├── clients  [--limit N]
+│   └── products [--limit N]
+├── get
+│   ├── invoice  <id>
+│   ├── client   <id>
+│   └── product  <id>
+├── search
+│   └── clients  <query> [--limit N]
+└── create
+    └── invoice  --client ID --file PATH    (stub — not implemented)
+
+Global flags (`--json`, `--verbose`) are accepted in any position thanks to the
+`common_flags` decorator in `main.py` which re-declares them on every
+subcommand and promotes them onto the shared `CLIContext`.
+
+Credentials storage
+-------------------
+~/.config/mayai-cli/fatture/credentials.json   (mode 0600)
+
+JSON shape:
+{
+  "access_token": "...",
+  "refresh_token": "...",
+  "token_type": "Bearer",
+  "expires_at": 1747600000,
+  "scopes": ["entity.clients:r", ...],
+  "company_id": 1596128
+}
+
+API base URL
+------------
+https://api-v2.fattureincloud.it
+- OAuth: /oauth/authorize, /oauth/token
+- Invoices: /c/{company_id}/issued_documents (list+detail; ?type=invoice)
+- Clients:  /c/{company_id}/entities/clients (list+detail; ?q=name LIKE '%X%')
+- Products: /c/{company_id}/products (list+detail)
+- Companies: /user/companies (used at login to pick a default company)
+
+Output conventions
+------------------
+- stdout = data; stderr = errors and `--verbose` request logs.
+- Default human output: indented key/value tree, empty/null fields hidden.
+- `--json`: NDJSON. Lists are streamed one object per line.
+- Exit codes: 0 ok, 1 application error, 2 not authenticated.
+
+Patterns to follow when adding new commands
+-------------------------------------------
+1. Add the URL constant in `fatture_cli/api/endpoints.py`.
+2. In `main.py`, register under the right group (list / get / search / create).
+3. Stack decorators in this order (bottom up):
+     @<group>.command("name", help="...")
+     @click.option(...)                  # command-specific options
+     @common_flags                       # adds --json / --verbose
+     @pass_ctx                           # injects CLIContext
+     def _handler(ctx, ...):
+4. Open the client with `ctx.require_client()` (context manager).
+5. Check `client.credentials.company_id` before using path templates.
+6. Catch `APIError` → `error(exc.message); sys.exit(1)`.
+7. Use a `_summarize_*` helper for list rows; `_detail_*` for single-resource
+   commands. Both should return a dict; the formatter strips empties.
+8. Paginate with `page` / `last_page` from the response payload; honour
+   `--limit` if present.
+9. End with `emit(rows_or_dict, as_json=ctx.as_json)`.
+
+Dependencies
+------------
+Runtime:  click >= 8.1, httpx >= 0.27
+Dev:      pytest >= 8, pytest-httpx >= 0.30, ruff >= 0.5
+Build:    hatchling
+
+Rate limits
+-----------
+Fatture in Cloud: 1000 req/hour per token. No client-side rate limiting yet.
