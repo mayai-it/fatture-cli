@@ -244,9 +244,10 @@ def _build_invoice_query(
     the `q=` expression — and `q` must be omitted entirely when empty,
     otherwise the API responds 422.
 
-    When `overdue` is set we ask the server for `payment_status = "not_paid"`
-    (the cheapest pre-filter FiC supports) and request `payments_list` so
-    the caller can apply a client-side due-date check.
+    When `overdue` is set we request `payments_list` so the caller can apply
+    a client-side due-date check. We deliberately do NOT add `payment_status`
+    to `q` — FiC rejects it as "Invalid query syntax". The overdue filter is
+    therefore entirely client-side.
     """
     params: dict[str, str] = {
         "type": "invoice",
@@ -259,8 +260,6 @@ def _build_invoice_query(
         filters.append(f"year(date) = {year}")
     if status:
         filters.append(f'status = "{status}"')
-    if overdue:
-        filters.append('payment_status = "not_paid"')
     if filters:
         params["q"] = " AND ".join(filters)
     return params
@@ -341,8 +340,11 @@ def _list_invoices(
                 sys.exit(1)
 
             for doc in payload.get("data") or []:
-                if overdue and not _is_overdue(doc, today):
-                    continue
+                if overdue:
+                    if (doc.get("status") or "").lower() == "paid":
+                        continue
+                    if not _is_overdue(doc, today):
+                        continue
                 rows.append(_summarize_invoice(doc))
                 if limit is not None and len(rows) >= limit:
                     break

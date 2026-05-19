@@ -189,17 +189,20 @@ def test_build_invoice_query_no_filters_omits_q():
     assert "q" not in params  # 422 if q is sent empty
 
 
-def test_build_invoice_query_overdue_sets_payment_status_and_payments_field():
+def test_build_invoice_query_overdue_requests_payments_list_only():
+    # FiC rejects `payment_status` inside `q` with "Invalid query syntax".
+    # Overdue must be enforced client-side only — the query must NOT contain it.
     params = _build_invoice_query(year=None, status=None, overdue=True)
-    assert 'payment_status = "not_paid"' in params["q"]
     assert "payments_list" in params["fields"]
+    assert "payment_status" not in params.get("q", "")
+    assert "q" not in params  # no other filter => no q at all
 
 
 def test_build_invoice_query_combines_year_and_overdue():
     params = _build_invoice_query(year=2026, status=None, overdue=True)
-    assert "year(date) = 2026" in params["q"]
-    assert 'payment_status = "not_paid"' in params["q"]
-    assert " AND " in params["q"]
+    assert params["q"] == "year(date) = 2026"
+    assert "payment_status" not in params["q"]
+    assert "payments_list" in params["fields"]
 
 
 # ---------- _is_overdue ----------
