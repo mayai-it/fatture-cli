@@ -15,17 +15,15 @@ Part of [MayAI CLI](https://mayai.it).
 
 ## Installation
 
-From source:
-
 ```bash
-git clone https://github.com/mayai-it/fatture-cli.git
-cd fatture-cli
-make install
+pip install mayai-fatture-cli
 ```
 
-Or directly with pip:
+Or from source:
 
 ```bash
+git clone https://github.com/mayai-it/fatture-cli
+cd fatture-cli
 pip install -e .
 ```
 
