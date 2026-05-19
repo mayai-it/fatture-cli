@@ -42,7 +42,6 @@ from fatture_cli.auth import (
 from fatture_cli.auth.oauth import DEFAULT_CALLBACK_PORT
 from fatture_cli.output import emit, error
 
-
 # ---------------------------------------------------------------------------
 # Shared CLI context
 # ---------------------------------------------------------------------------
@@ -120,7 +119,11 @@ def auth() -> None: ...
 
 
 @auth.command("login", help="Run the OAuth2 flow and save credentials.")
-@click.option("--client-id", required=True, help="OAuth client_id from developers.fattureincloud.it")
+@click.option(
+    "--client-id",
+    required=True,
+    help="OAuth client_id from developers.fattureincloud.it",
+)
 @click.option("--client-secret", required=True, help="OAuth client_secret.")
 @click.option(
     "--no-browser",
@@ -277,7 +280,12 @@ def _summarize_invoice(doc: dict) -> dict:
 @click.option("--limit", type=int, default=None, help="Stop after N invoices.")
 @common_flags
 @pass_ctx
-def _list_invoices(ctx: CLIContext, year: int | None, status: str | None, limit: int | None) -> None:
+def _list_invoices(
+    ctx: CLIContext,
+    year: int | None,
+    status: str | None,
+    limit: int | None,
+) -> None:
     with ctx.require_client() as client:
         company_id = client.credentials.company_id
         if not company_id:
