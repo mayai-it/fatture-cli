@@ -6,9 +6,17 @@ import subprocess
 import sys
 
 from fatture_cli.api import endpoints
-from fatture_cli.main import _summarize_client, _summarize_invoice
+from fatture_cli.main import (
+    _build_client_create_body,
+    _build_invoice_create_body,
+    _build_invoice_query,
+    _build_invoice_update_body,
+    _is_overdue,
+    _summarize_client,
+    _summarize_created_invoice,
+    _summarize_invoice,
+)
 from fatture_cli.output.formatter import _is_empty, _strip_empty
-
 
 # ---------- API endpoint URL constants ----------
 
@@ -121,6 +129,103 @@ def test_summarize_client_handles_empty_dict():
         "email": None,
         "tax_code": None,
     }
+
+
+# ---------- create / update body builders ----------
+
+def test_build_invoice_create_body_shape():
+    body = _build_invoice_create_body(
+        client_id=42, product="Consulenza", amount=500.0, date="2026-05-19"
+    )
+    data = body["data"]
+    assert data["type"] == "invoice"
+    assert data["entity"] == {"id": 42}
+    assert data["date"] == "2026-05-19"
+    items = data["items_list"]
+    assert len(items) == 1
+    line = items[0]
+    assert line["description"] == "Consulenza"
+    assert line["net_price"] == 500.0
+
+
+def test_build_invoice_create_body_coerces_types():
+    body = _build_invoice_create_body(client_id="7", product="X", amount="12.5", date="2026-01-01")
+    assert body["data"]["entity"]["id"] == 7
+    assert body["data"]["items_list"][0]["net_price"] == 12.5
+
+
+def test_build_client_create_body_keeps_optional_fields():
+    body = _build_client_create_body(name="ACME", email="a@b.it", vat="IT123")
+    assert body["data"]["name"] == "ACME"
+    assert body["data"]["email"] == "a@b.it"
+    assert body["data"]["vat_number"] == "IT123"
+
+
+def test_build_client_create_body_drops_empty_optionals():
+    body = _build_client_create_body(name="Solo Name", email=None, vat="")
+    assert body["data"] == {"name": "Solo Name", "type": "company"}
+
+
+def test_build_invoice_update_body_only_touches_payment_status():
+    body = _build_invoice_update_body("paid")
+    assert body == {"data": {"payment_status": "paid"}}
+
+
+def test_summarize_created_invoice_combines_number_and_numeration():
+    assert _summarize_created_invoice(
+        {"id": 99, "number": 3, "numeration": "/B", "date": "2026-05-19"}
+    ) == {"id": 99, "number": "3/B", "date": "2026-05-19"}
+
+
+def test_summarize_created_invoice_handles_missing_numeration():
+    assert _summarize_created_invoice({"id": 1, "number": 5})["number"] == 5
+
+
+# ---------- list-invoices query builder ----------
+
+def test_build_invoice_query_no_filters_omits_q():
+    params = _build_invoice_query(year=None, status=None)
+    assert params["type"] == "invoice"
+    assert "q" not in params  # 422 if q is sent empty
+
+
+def test_build_invoice_query_overdue_sets_payment_status_and_payments_field():
+    params = _build_invoice_query(year=None, status=None, overdue=True)
+    assert 'payment_status = "not_paid"' in params["q"]
+    assert "payments_list" in params["fields"]
+
+
+def test_build_invoice_query_combines_year_and_overdue():
+    params = _build_invoice_query(year=2026, status=None, overdue=True)
+    assert "year(date) = 2026" in params["q"]
+    assert 'payment_status = "not_paid"' in params["q"]
+    assert " AND " in params["q"]
+
+
+# ---------- _is_overdue ----------
+
+def test_is_overdue_true_when_unpaid_due_in_past():
+    doc = {"payments_list": [{"due_date": "2026-01-01", "status": "not_paid"}]}
+    assert _is_overdue(doc, today="2026-05-19") is True
+
+
+def test_is_overdue_false_when_due_in_future():
+    doc = {"payments_list": [{"due_date": "2099-01-01", "status": "not_paid"}]}
+    assert _is_overdue(doc, today="2026-05-19") is False
+
+
+def test_is_overdue_ignores_paid_payments():
+    doc = {
+        "payments_list": [
+            {"due_date": "2020-01-01", "status": "paid"},
+            {"due_date": "2099-01-01", "status": "not_paid"},
+        ]
+    }
+    assert _is_overdue(doc, today="2026-05-19") is False
+
+
+def test_is_overdue_handles_missing_payments_list():
+    assert _is_overdue({}, today="2026-05-19") is False
 
 
 # ---------- Exit code conventions ----------

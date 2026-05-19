@@ -16,6 +16,7 @@ registered as stubs so the surface area is reserved and discoverable via --help.
 
 from __future__ import annotations
 
+import datetime as _dt
 import sys
 from typing import Any
 
@@ -220,28 +221,36 @@ def get() -> None: ...
 def create() -> None: ...
 
 
+@cli.group(help="Update an existing resource (invoice, client, product).")
+def update() -> None: ...
+
+
 @cli.group(help="Search resources by free-text query.")
 def search() -> None: ...
 
 
-def _not_implemented(resource: str) -> None:
-    error(f"`{resource}` not implemented yet in this base scaffold")
-    sys.exit(1)
-
-
 _INVOICE_FIELDS = "id,number,numeration,date,entity,amount_net,amount_gross,status"
+_INVOICE_FIELDS_WITH_PAYMENTS = _INVOICE_FIELDS + ",payments_list"
 
 
-def _build_invoice_query(year: int | None, status: str | None) -> dict[str, str]:
+def _build_invoice_query(
+    year: int | None,
+    status: str | None,
+    overdue: bool = False,
+) -> dict[str, str]:
     """Translate user flags into Fatture in Cloud query params.
 
     FiC takes `type` as a top-level query param. Additional filters go into
     the `q=` expression — and `q` must be omitted entirely when empty,
     otherwise the API responds 422.
+
+    When `overdue` is set we ask the server for `payment_status = "not_paid"`
+    (the cheapest pre-filter FiC supports) and request `payments_list` so
+    the caller can apply a client-side due-date check.
     """
     params: dict[str, str] = {
         "type": "invoice",
-        "fields": _INVOICE_FIELDS,
+        "fields": _INVOICE_FIELDS_WITH_PAYMENTS if overdue else _INVOICE_FIELDS,
         "per_page": "100",
         "sort": "-date",
     }
@@ -250,9 +259,28 @@ def _build_invoice_query(year: int | None, status: str | None) -> dict[str, str]
         filters.append(f"year(date) = {year}")
     if status:
         filters.append(f'status = "{status}"')
+    if overdue:
+        filters.append('payment_status = "not_paid"')
     if filters:
         params["q"] = " AND ".join(filters)
     return params
+
+
+def _is_overdue(doc: dict, today: str) -> bool:
+    """True if any unpaid payment on `doc` has a due_date strictly before `today`.
+
+    `today` is an ISO date string (YYYY-MM-DD). ISO strings compare
+    lexicographically the same way as chronologically, so we avoid parsing.
+    A payment whose status is "paid" never counts as overdue, regardless of
+    its due date.
+    """
+    for p in doc.get("payments_list") or []:
+        if (p.get("status") or "").lower() == "paid":
+            continue
+        due = p.get("due_date")
+        if due and str(due) < today:
+            return True
+    return False
 
 
 def _summarize_invoice(doc: dict) -> dict:
@@ -277,6 +305,11 @@ def _summarize_invoice(doc: dict) -> dict:
     "--status",
     help="Filter by status (e.g. paid, not_paid, partially_paid, expired).",
 )
+@click.option(
+    "--overdue",
+    is_flag=True,
+    help="Only show unpaid invoices whose payment due date is in the past.",
+)
 @click.option("--limit", type=int, default=None, help="Stop after N invoices.")
 @common_flags
 @pass_ctx
@@ -284,6 +317,7 @@ def _list_invoices(
     ctx: CLIContext,
     year: int | None,
     status: str | None,
+    overdue: bool,
     limit: int | None,
 ) -> None:
     with ctx.require_client() as client:
@@ -293,7 +327,8 @@ def _list_invoices(
             sys.exit(2)
 
         path = INVOICES_LIST.format(company_id=company_id)
-        params = _build_invoice_query(year, status)
+        params = _build_invoice_query(year, status, overdue=overdue)
+        today = _dt.date.today().isoformat()
 
         rows: list[dict] = []
         page = 1
@@ -306,6 +341,8 @@ def _list_invoices(
                 sys.exit(1)
 
             for doc in payload.get("data") or []:
+                if overdue and not _is_overdue(doc, today):
+                    continue
                 rows.append(_summarize_invoice(doc))
                 if limit is not None and len(rows) >= limit:
                     break
@@ -558,11 +595,156 @@ def _get_product(ctx: CLIContext, product_id: int) -> None:
     emit(payload.get("data") or {}, as_json=ctx.as_json)
 
 
-@create.command("invoice")
-@click.option("--client", "client_id", required=True)
-@click.option("--file", "file_path", required=True, type=click.Path(exists=True))
-def _create_invoice(client_id: str, file_path: str) -> None:
-    _not_implemented("create invoice")
+def _build_invoice_create_body(
+    client_id: int,
+    product: str,
+    amount: float,
+    date: str,
+) -> dict:
+    """Build the POST body for `create invoice`.
+
+    Minimal valid shape per FiC: entity.id, items_list[0].description, date.
+    We send `name` too so the line item renders with a label in the FiC UI.
+    """
+    return {
+        "data": {
+            "type": "invoice",
+            "entity": {"id": int(client_id)},
+            "date": date,
+            "items_list": [
+                {
+                    "name": product,
+                    "description": product,
+                    "qty": 1,
+                    "net_price": float(amount),
+                }
+            ],
+        }
+    }
+
+
+def _build_client_create_body(
+    name: str,
+    email: str | None,
+    vat: str | None,
+) -> dict:
+    """Build the POST body for `create client`. Drops empty optional fields."""
+    data: dict[str, Any] = {"name": name, "type": "company"}
+    if email:
+        data["email"] = email
+    if vat:
+        data["vat_number"] = vat
+    return {"data": data}
+
+
+def _build_invoice_update_body(status: str) -> dict:
+    """Build the PUT body for `update invoice --status`. Only touches payment_status."""
+    return {"data": {"payment_status": status}}
+
+
+def _summarize_created_invoice(doc: dict) -> dict:
+    """Compact output for `create invoice`: just enough to confirm + reference."""
+    number = doc.get("number")
+    numeration = doc.get("numeration")
+    full_number = f"{number}{numeration}" if numeration else number
+    return {
+        "id": doc.get("id"),
+        "number": full_number,
+        "date": doc.get("date"),
+    }
+
+
+@create.command("invoice", help="Create a new invoice from inline flags.")
+@click.option("--client", "client_id", required=True, type=int, help="Client (entity) id.")
+@click.option("--product", required=True, help="Product / service description line.")
+@click.option("--amount", required=True, type=float, help="Net price for the single line.")
+@click.option("--date", required=True, help="Issue date (YYYY-MM-DD).")
+@common_flags
+@pass_ctx
+def _create_invoice(
+    ctx: CLIContext,
+    client_id: int,
+    product: str,
+    amount: float,
+    date: str,
+) -> None:
+    body = _build_invoice_create_body(client_id, product, amount, date)
+    with ctx.require_client() as client:
+        company_id = client.credentials.company_id
+        if not company_id:
+            error("no active company — run `fatture auth login` again")
+            sys.exit(2)
+
+        path = INVOICES_LIST.format(company_id=company_id)
+        try:
+            payload = client.post(path, json=body) or {}
+        except APIError as exc:
+            error(exc.message)
+            sys.exit(1)
+
+    emit(_summarize_created_invoice(payload.get("data") or {}), as_json=ctx.as_json)
+
+
+@create.command("client", help="Create a new client from inline flags.")
+@click.option("--name", required=True, help="Display name of the client.")
+@click.option("--email", help="Primary email address.")
+@click.option("--vat", "vat", help="VAT number (partita IVA).")
+@common_flags
+@pass_ctx
+def _create_client(
+    ctx: CLIContext,
+    name: str,
+    email: str | None,
+    vat: str | None,
+) -> None:
+    body = _build_client_create_body(name, email, vat)
+    with ctx.require_client() as client:
+        company_id = client.credentials.company_id
+        if not company_id:
+            error("no active company — run `fatture auth login` again")
+            sys.exit(2)
+
+        path = CLIENTS_LIST.format(company_id=company_id)
+        try:
+            payload = client.post(path, json=body) or {}
+        except APIError as exc:
+            error(exc.message)
+            sys.exit(1)
+
+    data = payload.get("data") or {}
+    emit({"id": data.get("id"), "name": data.get("name")}, as_json=ctx.as_json)
+
+
+@update.command("invoice", help="Update an invoice's payment status.")
+@click.argument("invoice_id", type=int)
+@click.option(
+    "--status",
+    required=True,
+    type=click.Choice(["paid", "not_paid"]),
+    help="New payment status.",
+)
+@common_flags
+@pass_ctx
+def _update_invoice(ctx: CLIContext, invoice_id: int, status: str) -> None:
+    body = _build_invoice_update_body(status)
+    with ctx.require_client() as client:
+        company_id = client.credentials.company_id
+        if not company_id:
+            error("no active company — run `fatture auth login` again")
+            sys.exit(2)
+
+        path = INVOICE_DETAIL.format(company_id=company_id, document_id=invoice_id)
+        try:
+            payload = client.put(path, json=body) or {}
+        except APIError as exc:
+            error(exc.message)
+            sys.exit(1)
+
+    data = payload.get("data") or {}
+    emit(
+        {"id": data.get("id") or invoice_id, "payment_status": status},
+        as_json=ctx.as_json,
+    )
 
 
 @search.command("clients", help="Search clients by free-text name match.")
