@@ -137,6 +137,85 @@ def test_validate_reports_xml_syntax_error() -> None:
     assert "XML syntax error" in errors[0]
 
 
+def test_seller_without_vat_gets_placeholder_idfiscaleiva(invoice: dict) -> None:
+    """Sellers MUST emit IdFiscaleIVA — placeholder when the source has none."""
+    bare_company = {
+        "name": "Mia Azienda",
+        "address_street": "Via Roma 1",
+        "address_postal_code": "00100",
+        "address_city": "Roma",
+        "address_province": "RM",
+        "country": "IT",
+    }
+    xml = build_fattura_xml(invoice, bare_company)
+    assert validate_fattura_xml(xml) == []
+    root = _parse(xml)
+    idiva = root.find(".//CedentePrestatore/DatiAnagrafici/IdFiscaleIVA")
+    assert idiva is not None
+    assert idiva.findtext("IdPaese") == "IT"
+    assert idiva.findtext("IdCodice") == "00000000000"
+
+
+def test_buyer_with_only_tax_code_uses_codice_fiscale(company: dict) -> None:
+    """Italian individuals carry a 16-char codice fiscale; map it to CodiceFiscale."""
+    invoice = {
+        "id": 1,
+        "number": 1,
+        "date": "2026-05-19",
+        "entity": {
+            "name": "Mario Rossi",
+            "tax_code": "RSSMRA80A01H501U",
+            "address_street": "Via X",
+            "address_postal_code": "20121",
+            "address_city": "Milano",
+            "address_province": "MI",
+            "country": "IT",
+        },
+        "items_list": [
+            {"name": "Servizio", "qty": 1, "net_price": 100, "vat": {"value": 22}},
+        ],
+        "amount_net": 100,
+        "amount_gross": 122,
+        "payments_list": [],
+    }
+    xml = build_fattura_xml(invoice, company)
+    assert validate_fattura_xml(xml) == []
+    root = _parse(xml)
+    anag = root.find(".//CessionarioCommittente/DatiAnagrafici")
+    assert anag is not None
+    assert anag.find("IdFiscaleIVA") is None
+    assert anag.findtext("CodiceFiscale") == "RSSMRA80A01H501U"
+
+
+def test_buyer_without_any_identifier_gets_placeholder(company: dict) -> None:
+    """Missing both vat_number and tax_code must still produce a valid document."""
+    invoice = {
+        "id": 1,
+        "number": 1,
+        "date": "2026-05-19",
+        "entity": {
+            "name": "Cliente Anonimo",
+            "address_street": "Via X",
+            "address_postal_code": "20121",
+            "address_city": "Milano",
+            "address_province": "MI",
+            "country": "IT",
+        },
+        "items_list": [
+            {"name": "Servizio", "qty": 1, "net_price": 100, "vat": {"value": 22}},
+        ],
+        "amount_net": 100,
+        "amount_gross": 122,
+        "payments_list": [],
+    }
+    xml = build_fattura_xml(invoice, company)
+    assert validate_fattura_xml(xml) == []
+    root = _parse(xml)
+    idiva = root.find(".//CessionarioCommittente/DatiAnagrafici/IdFiscaleIVA")
+    assert idiva is not None
+    assert idiva.findtext("IdCodice") == "00000000000"
+
+
 def test_zero_vat_rate_gets_natura(company: dict) -> None:
     """A 0% line is invalid without a Natura code — the builder must add one."""
     invoice = {

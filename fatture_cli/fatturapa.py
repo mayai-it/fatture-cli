@@ -111,22 +111,44 @@ def _addr_field(address: Any, key: str, default: str = "") -> str:
 def _build_anagrafici(parent: etree._Element, party: dict, *, role: str) -> None:
     """Populate DatiAnagrafici for either CedentePrestatore or CessionarioCommittente.
 
-    `role` is "seller" or "buyer" — sellers always need IdFiscaleIVA and
-    RegimeFiscale; buyers may have only a CodiceFiscale (private individuals).
+    The XSD declares DatiAnagrafici as a strict sequence:
+    `IdFiscaleIVA?, CodiceFiscale?, Anagrafica, …` — and at least one of
+    IdFiscaleIVA / CodiceFiscale must be present, so we must always emit one
+    BEFORE Anagrafica. The seller (CedentePrestatore) further requires
+    IdFiscaleIVA (no CodiceFiscale-only path) and a RegimeFiscale.
     """
     anag = etree.SubElement(parent, "DatiAnagrafici")
 
     vat = _parse_vat(party.get("vat_number"))
     tax_code = (party.get("tax_code") or "").strip()
 
-    if vat is not None:
+    if role == "seller":
+        # Sellers MUST have IdFiscaleIVA. If the upstream record is missing it,
+        # emit a placeholder so the document remains structurally valid — the
+        # human-readable name still travels via Anagrafica/Denominazione.
+        if vat is None:
+            vat = ("IT", "00000000000")
         idiva = etree.SubElement(anag, "IdFiscaleIVA")
         _e(idiva, "IdPaese", vat[0])
         _e(idiva, "IdCodice", vat[1])
-
-    # CodiceFiscale is optional, but include it when present and distinct from VAT.
-    if tax_code and (vat is None or tax_code != vat[1]):
-        _e(anag, "CodiceFiscale", tax_code)
+        # CodiceFiscale is optional, include it only when distinct from VAT.
+        if tax_code and tax_code != vat[1]:
+            _e(anag, "CodiceFiscale", tax_code)
+    else:
+        # Buyer: pick exactly one identifier. Order of preference matches the
+        # XSD sequence — IdFiscaleIVA first, then CodiceFiscale. Italian
+        # individuals usually have only a tax_code (16-char codice fiscale),
+        # which belongs in CodiceFiscale, not IdFiscaleIVA.
+        if vat is not None:
+            idiva = etree.SubElement(anag, "IdFiscaleIVA")
+            _e(idiva, "IdPaese", vat[0])
+            _e(idiva, "IdCodice", vat[1])
+        elif tax_code:
+            _e(anag, "CodiceFiscale", tax_code)
+        else:
+            idiva = etree.SubElement(anag, "IdFiscaleIVA")
+            _e(idiva, "IdPaese", "IT")
+            _e(idiva, "IdCodice", "00000000000")
 
     ana = etree.SubElement(anag, "Anagrafica")
     name = (party.get("name") or "").strip() or "N/D"
