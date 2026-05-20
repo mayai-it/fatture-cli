@@ -78,6 +78,26 @@ Find your path with: `which fatture-mcp`
 | `fatture_create_client` | Create a new client |
 | `fatture_auth_status` | Check authentication status |
 
+## FatturaPA XML
+
+Generate and validate FatturaPA XML directly from your Fatture in Cloud invoices.
+
+```bash
+# Generate XML (prints to stdout)
+fatture export invoice <id>
+
+# Save to file
+fatture export invoice <id> --output IT12345678901_0001.xml
+
+# Validate against official XSD schema (v1.2.3)
+fatture validate invoice <id>
+```
+
+The generated XML follows the **FatturaPA v1.2.3** schema (FPR12 format),
+validated against the official XSD from fatturapa.gov.it.
+Note: digital signature and SDI submission require a qualified certificate
+and are outside the scope of this tool.
+
 ## Quick start
 
 ```bash
