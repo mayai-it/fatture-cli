@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import datetime as _dt
 import sys
+from pathlib import Path
 from typing import Any
 
 import click
@@ -227,6 +228,14 @@ def update() -> None: ...
 
 @cli.group(help="Search resources by free-text query.")
 def search() -> None: ...
+
+
+@cli.group(help="Export resources in interchange formats (FatturaPA, …).")
+def export() -> None: ...
+
+
+@cli.group(help="Validate resources against external schemas.")
+def validate() -> None: ...
 
 
 _INVOICE_FIELDS = "id,number,numeration,date,entity,amount_net,amount_gross,status"
@@ -800,6 +809,90 @@ def _search_clients(ctx: CLIContext, query: str, limit: int | None) -> None:
             page += 1
 
     emit(rows, as_json=ctx.as_json)
+
+
+def _fetch_invoice_raw(client: APIClient, company_id: int, invoice_id: int) -> dict:
+    """Return the raw `data` payload for an invoice — same shape FatturaPA needs."""
+    path = INVOICE_DETAIL.format(company_id=company_id, document_id=invoice_id)
+    payload = client.get(path, params={"type": "invoice"}) or {}
+    return payload.get("data") or {}
+
+
+def _fetch_active_company(client: APIClient, company_id: int) -> dict:
+    """Return the active company dict from /user/companies (matching company_id)."""
+    payload = client.get(USER_COMPANIES) or {}
+    companies = (payload.get("data") or {}).get("companies") or []
+    for c in companies:
+        if int(c.get("id") or 0) == company_id:
+            return c
+    return companies[0] if companies else {}
+
+
+@export.command("invoice", help="Export an invoice as FatturaPA v1.2.3 XML.")
+@click.argument("invoice_id", type=int)
+@click.option(
+    "--output",
+    "-o",
+    type=click.Path(dir_okay=False, writable=True),
+    help="Write XML to FILE (default: stdout). Use IT{vat}_{id}.xml convention.",
+)
+@common_flags
+@pass_ctx
+def _export_invoice(ctx: CLIContext, invoice_id: int, output: str | None) -> None:
+    from fatture_cli.fatturapa import build_fattura_xml
+
+    with ctx.require_client() as client:
+        company_id = client.credentials.company_id
+        if not company_id:
+            error("no active company — run `fatture auth login` again")
+            sys.exit(2)
+
+        try:
+            invoice = _fetch_invoice_raw(client, company_id, invoice_id)
+            company = _fetch_active_company(client, company_id)
+        except APIError as exc:
+            error(exc.message)
+            sys.exit(1)
+
+    xml = build_fattura_xml(invoice, company)
+
+    if output:
+        Path(output).write_text(xml, encoding="utf-8")
+        emit({"file": output, "bytes": len(xml.encode("utf-8"))}, as_json=ctx.as_json)
+    else:
+        # The XML already starts with `<?xml ... ?>` — write raw, no extra newline.
+        sys.stdout.write(xml)
+
+
+@validate.command("invoice", help="Validate an invoice's FatturaPA XML against the XSD.")
+@click.argument("invoice_id", type=int)
+@common_flags
+@pass_ctx
+def _validate_invoice(ctx: CLIContext, invoice_id: int) -> None:
+    from fatture_cli.fatturapa import build_fattura_xml, validate_fattura_xml
+
+    with ctx.require_client() as client:
+        company_id = client.credentials.company_id
+        if not company_id:
+            error("no active company — run `fatture auth login` again")
+            sys.exit(2)
+
+        try:
+            invoice = _fetch_invoice_raw(client, company_id, invoice_id)
+            company = _fetch_active_company(client, company_id)
+        except APIError as exc:
+            error(exc.message)
+            sys.exit(1)
+
+    xml = build_fattura_xml(invoice, company)
+    errors = validate_fattura_xml(xml)
+
+    if not errors:
+        emit({"valid": True}, as_json=ctx.as_json)
+        return
+
+    emit({"valid": False, "errors": errors}, as_json=ctx.as_json)
+    sys.exit(1)
 
 
 if __name__ == "__main__":
