@@ -33,6 +33,51 @@ For local development (adds `pytest`, `ruff`):
 make dev
 ```
 
+## MCP Server
+
+fatture-cli ships with a native MCP server, letting AI agents like Claude
+access your Fatture in Cloud data directly.
+
+![MCP demo](docs/mcp-demo.png)
+
+### Setup with Claude Desktop
+
+Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "fatture": {
+      "command": "/path/to/fatture-mcp"
+    }
+  }
+}
+```
+
+Find your path with: `which fatture-mcp`
+
+### Compatible MCP clients
+
+| Client | Status |
+|--------|--------|
+| Claude Desktop | ✅ Tested |
+| Cursor | ✅ Same stdio config |
+| Continue (VS Code) | ✅ Same stdio config |
+| Zed | ✅ Same stdio config |
+| ChatGPT | ⏳ MCP support coming soon |
+
+### Available tools
+
+| Tool | Description |
+|------|-------------|
+| `fatture_list_invoices` | List invoices (year, status, overdue, limit) |
+| `fatture_get_invoice` | Get full invoice with lines and payments |
+| `fatture_list_clients` | List all clients |
+| `fatture_search_clients` | Search clients by name |
+| `fatture_create_invoice` | Create a new invoice |
+| `fatture_create_client` | Create a new client |
+| `fatture_auth_status` | Check authentication status |
+
 ## Quick start
 
 ```bash
