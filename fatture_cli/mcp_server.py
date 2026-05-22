@@ -27,15 +27,17 @@ from fatture_cli.api.endpoints import (
     INVOICES_LIST,
 )
 from fatture_cli.auth import load_credentials
-from fatture_cli.main import (
-    _build_client_create_body,
-    _build_invoice_create_body,
-    _build_invoice_query,
-    _detail_invoice,
-    _is_overdue,
-    _summarize_client,
-    _summarize_created_invoice,
-    _summarize_invoice,
+from fatture_cli.transforms.client import (
+    build_client_create_body,
+    summarize_client,
+)
+from fatture_cli.transforms.invoice import (
+    build_invoice_create_body,
+    build_invoice_query,
+    detail_invoice,
+    is_overdue,
+    summarize_created_invoice,
+    summarize_invoice,
 )
 
 log = logging.getLogger("fatture.mcp")
@@ -106,7 +108,7 @@ def fatture_list_invoices(
     """List invoices. Returns id, date, number, client, total, status."""
     client, company_id = _require(ctx)
     path = INVOICES_LIST.format(company_id=company_id)
-    params = _build_invoice_query(year, status, overdue=overdue)
+    params = build_invoice_query(year, status, overdue=overdue)
     today = _dt.date.today().isoformat()
 
     rows: list[dict] = []
@@ -119,9 +121,9 @@ def fatture_list_invoices(
                 if overdue:
                     if (doc.get("status") or "").lower() == "paid":
                         continue
-                    if not _is_overdue(doc, today):
+                    if not is_overdue(doc, today):
                         continue
-                rows.append(_summarize_invoice(doc))
+                rows.append(summarize_invoice(doc))
                 if len(rows) >= limit:
                     return rows
             last_page = payload.get("last_page") or 1
@@ -141,7 +143,7 @@ def fatture_get_invoice(ctx: Context, invoice_id: int) -> dict:
         payload = client.get(path, params={"type": "invoice"}) or {}
     except APIError as exc:
         raise ToolError(exc.message) from exc
-    return _detail_invoice(payload.get("data") or {})
+    return detail_invoice(payload.get("data") or {})
 
 
 @mcp.tool()
@@ -162,7 +164,7 @@ def fatture_list_clients(ctx: Context, limit: int = 50) -> list[dict]:
             params["page"] = str(page)
             payload = client.get(path, params=params) or {}
             for doc in payload.get("data") or []:
-                rows.append(_summarize_client(doc))
+                rows.append(summarize_client(doc))
                 if len(rows) >= limit:
                     return rows
             last_page = payload.get("last_page") or 1
@@ -189,7 +191,7 @@ def fatture_search_clients(ctx: Context, query: str) -> list[dict]:
         docs = _paginate(client, path, params)
     except APIError as exc:
         raise ToolError(exc.message) from exc
-    return [_summarize_client(d) for d in docs]
+    return [summarize_client(d) for d in docs]
 
 
 @mcp.tool()
@@ -203,13 +205,13 @@ def fatture_create_invoice(
     """Create invoice. date format YYYY-MM-DD. Returns id and number."""
     client, company_id = _require(ctx)
     issue_date = date or _dt.date.today().isoformat()
-    body = _build_invoice_create_body(client_id, product, amount, issue_date)
+    body = build_invoice_create_body(client_id, product, amount, issue_date)
     path = INVOICES_LIST.format(company_id=company_id)
     try:
         payload = client.post(path, json=body) or {}
     except APIError as exc:
         raise ToolError(exc.message) from exc
-    return _summarize_created_invoice(payload.get("data") or {})
+    return summarize_created_invoice(payload.get("data") or {})
 
 
 @mcp.tool()
@@ -221,7 +223,7 @@ def fatture_create_client(
 ) -> dict:
     """Create a new client. Returns id and name."""
     client, company_id = _require(ctx)
-    body = _build_client_create_body(name, email, vat)
+    body = build_client_create_body(name, email, vat)
     path = CLIENTS_LIST.format(company_id=company_id)
     try:
         payload = client.post(path, json=body) or {}

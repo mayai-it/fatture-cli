@@ -43,6 +43,21 @@ from fatture_cli.auth import (
 )
 from fatture_cli.auth.oauth import DEFAULT_CALLBACK_PORT
 from fatture_cli.output import emit, error
+from fatture_cli.transforms.client import (
+    build_client_create_body,
+    detail_client,
+    summarize_client,
+)
+from fatture_cli.transforms.invoice import (
+    build_invoice_create_body,
+    build_invoice_query,
+    build_invoice_update_body,
+    detail_invoice,
+    is_overdue,
+    summarize_created_invoice,
+    summarize_invoice,
+)
+from fatture_cli.transforms.product import summarize_product
 
 # ---------------------------------------------------------------------------
 # Shared CLI context
@@ -238,75 +253,6 @@ def export() -> None: ...
 def validate() -> None: ...
 
 
-_INVOICE_FIELDS = "id,number,numeration,date,entity,amount_net,amount_gross,status"
-_INVOICE_FIELDS_WITH_PAYMENTS = _INVOICE_FIELDS + ",payments_list"
-
-
-def _build_invoice_query(
-    year: int | None,
-    status: str | None,
-    overdue: bool = False,
-) -> dict[str, str]:
-    """Translate user flags into Fatture in Cloud query params.
-
-    FiC takes `type` as a top-level query param. Additional filters go into
-    the `q=` expression — and `q` must be omitted entirely when empty,
-    otherwise the API responds 422.
-
-    When `overdue` is set we request `payments_list` so the caller can apply
-    a client-side due-date check. We deliberately do NOT add `payment_status`
-    to `q` — FiC rejects it as "Invalid query syntax". The overdue filter is
-    therefore entirely client-side.
-    """
-    params: dict[str, str] = {
-        "type": "invoice",
-        "fields": _INVOICE_FIELDS_WITH_PAYMENTS if overdue else _INVOICE_FIELDS,
-        "per_page": "100",
-        "sort": "-date",
-    }
-    filters: list[str] = []
-    if year is not None:
-        filters.append(f"year(date) = {year}")
-    if status:
-        filters.append(f'status = "{status}"')
-    if filters:
-        params["q"] = " AND ".join(filters)
-    return params
-
-
-def _is_overdue(doc: dict, today: str) -> bool:
-    """True if any unpaid payment on `doc` has a due_date strictly before `today`.
-
-    `today` is an ISO date string (YYYY-MM-DD). ISO strings compare
-    lexicographically the same way as chronologically, so we avoid parsing.
-    A payment whose status is "paid" never counts as overdue, regardless of
-    its due date.
-    """
-    for p in doc.get("payments_list") or []:
-        if (p.get("status") or "").lower() == "paid":
-            continue
-        due = p.get("due_date")
-        if due and str(due) < today:
-            return True
-    return False
-
-
-def _summarize_invoice(doc: dict) -> dict:
-    """Pick the columns we promised: id, date, number, client, total, status."""
-    entity = doc.get("entity") or {}
-    number = doc.get("number")
-    numeration = doc.get("numeration")
-    full_number = f"{number}{numeration}" if numeration else number
-    return {
-        "id": doc.get("id"),
-        "date": doc.get("date"),
-        "number": full_number,
-        "client": entity.get("name"),
-        "total": doc.get("amount_gross"),
-        "status": doc.get("status"),
-    }
-
-
 @list_.command("invoices", help="List issued invoices for the active company.")
 @click.option("--year", type=int, help="Filter by year of issue date.")
 @click.option(
@@ -335,7 +281,7 @@ def _list_invoices(
             sys.exit(2)
 
         path = INVOICES_LIST.format(company_id=company_id)
-        params = _build_invoice_query(year, status, overdue=overdue)
+        params = build_invoice_query(year, status, overdue=overdue)
         today = _dt.date.today().isoformat()
 
         rows: list[dict] = []
@@ -352,9 +298,9 @@ def _list_invoices(
                 if overdue:
                     if (doc.get("status") or "").lower() == "paid":
                         continue
-                    if not _is_overdue(doc, today):
+                    if not is_overdue(doc, today):
                         continue
-                rows.append(_summarize_invoice(doc))
+                rows.append(summarize_invoice(doc))
                 if limit is not None and len(rows) >= limit:
                     break
 
@@ -369,15 +315,6 @@ def _list_invoices(
 
 
 _CLIENT_FIELDS = "id,name,email,tax_code"
-
-
-def _summarize_client(doc: dict) -> dict:
-    return {
-        "id": doc.get("id"),
-        "name": doc.get("name"),
-        "email": doc.get("email"),
-        "tax_code": doc.get("tax_code"),
-    }
 
 
 @list_.command("clients", help="List clients for the active company.")
@@ -409,7 +346,7 @@ def _list_clients(ctx: CLIContext, limit: int | None) -> None:
                 sys.exit(1)
 
             for doc in payload.get("data") or []:
-                rows.append(_summarize_client(doc))
+                rows.append(summarize_client(doc))
                 if limit is not None and len(rows) >= limit:
                     break
 
@@ -424,16 +361,6 @@ def _list_clients(ctx: CLIContext, limit: int | None) -> None:
 
 
 _PRODUCT_FIELDS = "id,name,net_price,gross_price,vat,measure,description,code,category"
-
-
-def _summarize_product(doc: dict) -> dict:
-    vat = doc.get("vat") or {}
-    return {
-        "id": doc.get("id"),
-        "name": doc.get("name"),
-        "price": doc.get("net_price"),
-        "vat_type": vat.get("description") or vat.get("value"),
-    }
 
 
 @list_.command("products", help="List products / services for the active company.")
@@ -465,7 +392,7 @@ def _list_products(ctx: CLIContext, limit: int | None) -> None:
                 sys.exit(1)
 
             for doc in payload.get("data") or []:
-                rows.append(_summarize_product(doc))
+                rows.append(summarize_product(doc))
                 if limit is not None and len(rows) >= limit:
                     break
 
@@ -477,47 +404,6 @@ def _list_products(ctx: CLIContext, limit: int | None) -> None:
             page += 1
 
     emit(rows, as_json=ctx.as_json)
-
-
-def _detail_invoice(doc: dict) -> dict:
-    entity = doc.get("entity") or {}
-    number = doc.get("number")
-    numeration = doc.get("numeration")
-    full_number = f"{number}{numeration}" if numeration else number
-
-    lines: list[dict] = []
-    for item in doc.get("items_list") or []:
-        lines.append({
-            "description": item.get("name") or item.get("description"),
-            "qty": item.get("qty"),
-            "amount_net": item.get("net_price"),
-            "amount_gross": item.get("gross_price"),
-        })
-
-    payments: list[dict] = []
-    for p in doc.get("payments_list") or []:
-        payments.append({
-            "due_date": p.get("due_date"),
-            "amount": p.get("amount"),
-            "status": p.get("status"),
-            "paid_date": p.get("paid_date"),
-            "payment_account": (p.get("payment_account") or {}).get("name"),
-        })
-
-    return {
-        "id": doc.get("id"),
-        "date": doc.get("date"),
-        "number": full_number,
-        "client": entity.get("name"),
-        "client_id": entity.get("id"),
-        "lines": lines,
-        "amount_net": doc.get("amount_net"),
-        "total": doc.get("amount_gross"),
-        "currency": (doc.get("currency") or {}).get("id"),
-        "status": doc.get("status"),
-        "payment_method": (doc.get("payment_method") or {}).get("name"),
-        "payments": payments,
-    }
 
 
 @get.command("invoice", help="Fetch a single invoice by id.")
@@ -539,28 +425,7 @@ def _get_invoice(ctx: CLIContext, invoice_id: int) -> None:
             sys.exit(1)
 
     data = payload.get("data") or {}
-    emit(_detail_invoice(data), as_json=ctx.as_json)
-
-
-def _detail_client(doc: dict) -> dict:
-    address = {
-        "street": doc.get("address_street"),
-        "postal_code": doc.get("address_postal_code"),
-        "city": doc.get("address_city"),
-        "province": doc.get("address_province"),
-        "extra": doc.get("address_extra"),
-        "country": doc.get("country"),
-    }
-    return {
-        "id": doc.get("id"),
-        "name": doc.get("name"),
-        "email": doc.get("email"),
-        "certified_email": doc.get("certified_email"),
-        "phone": doc.get("phone"),
-        "tax_code": doc.get("tax_code"),
-        "vat_number": doc.get("vat_number"),
-        "address": address,
-    }
+    emit(detail_invoice(data), as_json=ctx.as_json)
 
 
 @get.command("client", help="Fetch a single client by id.")
@@ -582,7 +447,7 @@ def _get_client(ctx: CLIContext, client_id: int) -> None:
             sys.exit(1)
 
     data = payload.get("data") or {}
-    emit(_detail_client(data), as_json=ctx.as_json)
+    emit(detail_client(data), as_json=ctx.as_json)
 
 
 @get.command("product", help="Fetch a single product by id.")
@@ -606,65 +471,6 @@ def _get_product(ctx: CLIContext, product_id: int) -> None:
     emit(payload.get("data") or {}, as_json=ctx.as_json)
 
 
-def _build_invoice_create_body(
-    client_id: int,
-    product: str,
-    amount: float,
-    date: str,
-) -> dict:
-    """Build the POST body for `create invoice`.
-
-    Minimal valid shape per FiC: entity.id, items_list[0].description, date.
-    We send `name` too so the line item renders with a label in the FiC UI.
-    """
-    return {
-        "data": {
-            "type": "invoice",
-            "entity": {"id": int(client_id)},
-            "date": date,
-            "items_list": [
-                {
-                    "name": product,
-                    "description": product,
-                    "qty": 1,
-                    "net_price": float(amount),
-                }
-            ],
-        }
-    }
-
-
-def _build_client_create_body(
-    name: str,
-    email: str | None,
-    vat: str | None,
-) -> dict:
-    """Build the POST body for `create client`. Drops empty optional fields."""
-    data: dict[str, Any] = {"name": name, "type": "company"}
-    if email:
-        data["email"] = email
-    if vat:
-        data["vat_number"] = vat
-    return {"data": data}
-
-
-def _build_invoice_update_body(status: str) -> dict:
-    """Build the PUT body for `update invoice --status`. Only touches payment_status."""
-    return {"data": {"payment_status": status}}
-
-
-def _summarize_created_invoice(doc: dict) -> dict:
-    """Compact output for `create invoice`: just enough to confirm + reference."""
-    number = doc.get("number")
-    numeration = doc.get("numeration")
-    full_number = f"{number}{numeration}" if numeration else number
-    return {
-        "id": doc.get("id"),
-        "number": full_number,
-        "date": doc.get("date"),
-    }
-
-
 @create.command("invoice", help="Create a new invoice from inline flags.")
 @click.option("--client", "client_id", required=True, type=int, help="Client (entity) id.")
 @click.option("--product", required=True, help="Product / service description line.")
@@ -679,7 +485,7 @@ def _create_invoice(
     amount: float,
     date: str,
 ) -> None:
-    body = _build_invoice_create_body(client_id, product, amount, date)
+    body = build_invoice_create_body(client_id, product, amount, date)
     with ctx.require_client() as client:
         company_id = client.credentials.company_id
         if not company_id:
@@ -693,7 +499,7 @@ def _create_invoice(
             error(exc.message)
             sys.exit(1)
 
-    emit(_summarize_created_invoice(payload.get("data") or {}), as_json=ctx.as_json)
+    emit(summarize_created_invoice(payload.get("data") or {}), as_json=ctx.as_json)
 
 
 @create.command("client", help="Create a new client from inline flags.")
@@ -708,7 +514,7 @@ def _create_client(
     email: str | None,
     vat: str | None,
 ) -> None:
-    body = _build_client_create_body(name, email, vat)
+    body = build_client_create_body(name, email, vat)
     with ctx.require_client() as client:
         company_id = client.credentials.company_id
         if not company_id:
@@ -737,7 +543,7 @@ def _create_client(
 @common_flags
 @pass_ctx
 def _update_invoice(ctx: CLIContext, invoice_id: int, status: str) -> None:
-    body = _build_invoice_update_body(status)
+    body = build_invoice_update_body(status)
     with ctx.require_client() as client:
         company_id = client.credentials.company_id
         if not company_id:
@@ -797,7 +603,7 @@ def _search_clients(ctx: CLIContext, query: str, limit: int | None) -> None:
                 sys.exit(1)
 
             for doc in payload.get("data") or []:
-                rows.append(_summarize_client(doc))
+                rows.append(summarize_client(doc))
                 if limit is not None and len(rows) >= limit:
                     break
 

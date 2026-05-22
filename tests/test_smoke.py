@@ -6,17 +6,19 @@ import subprocess
 import sys
 
 from fatture_cli.api import endpoints
-from fatture_cli.main import (
-    _build_client_create_body,
-    _build_invoice_create_body,
-    _build_invoice_query,
-    _build_invoice_update_body,
-    _is_overdue,
-    _summarize_client,
-    _summarize_created_invoice,
-    _summarize_invoice,
-)
 from fatture_cli.output.formatter import _is_empty, _strip_empty
+from fatture_cli.transforms.client import (
+    build_client_create_body,
+    summarize_client,
+)
+from fatture_cli.transforms.invoice import (
+    build_invoice_create_body,
+    build_invoice_query,
+    build_invoice_update_body,
+    is_overdue,
+    summarize_created_invoice,
+    summarize_invoice,
+)
 
 # ---------- API endpoint URL constants ----------
 
@@ -71,7 +73,7 @@ def test_strip_empty_recurses_into_nested_structures():
     assert cleaned == {"outer": {"keep": "v"}, "list": [{"a": 1}]}
 
 
-# ---------- _summarize_invoice handles missing fields ----------
+# ---------- summarize_invoice handles missing fields ----------
 
 def test_summarize_invoice_full_payload():
     doc = {
@@ -83,7 +85,7 @@ def test_summarize_invoice_full_payload():
         "amount_gross": 1220.0,
         "status": "paid",
     }
-    out = _summarize_invoice(doc)
+    out = summarize_invoice(doc)
     assert out == {
         "id": 1,
         "date": "2026-01-15",
@@ -95,7 +97,7 @@ def test_summarize_invoice_full_payload():
 
 
 def test_summarize_invoice_handles_empty_dict():
-    out = _summarize_invoice({})
+    out = summarize_invoice({})
     assert out == {
         "id": None,
         "date": None,
@@ -107,23 +109,23 @@ def test_summarize_invoice_handles_empty_dict():
 
 
 def test_summarize_invoice_missing_numeration_and_entity():
-    out = _summarize_invoice({"id": 99, "number": 42})
+    out = summarize_invoice({"id": 99, "number": 42})
     assert out["id"] == 99
     assert out["number"] == 42
     assert out["client"] is None
 
 
-# ---------- _summarize_client handles missing fields ----------
+# ---------- summarize_client handles missing fields ----------
 
 def test_summarize_client_full_payload():
-    out = _summarize_client(
+    out = summarize_client(
         {"id": 5, "name": "Rossi", "email": "a@b.it", "tax_code": "RSSMRA"}
     )
     assert out == {"id": 5, "name": "Rossi", "email": "a@b.it", "tax_code": "RSSMRA"}
 
 
 def test_summarize_client_handles_empty_dict():
-    assert _summarize_client({}) == {
+    assert summarize_client({}) == {
         "id": None,
         "name": None,
         "email": None,
@@ -134,7 +136,7 @@ def test_summarize_client_handles_empty_dict():
 # ---------- create / update body builders ----------
 
 def test_build_invoice_create_body_shape():
-    body = _build_invoice_create_body(
+    body = build_invoice_create_body(
         client_id=42, product="Consulenza", amount=500.0, date="2026-05-19"
     )
     data = body["data"]
@@ -149,42 +151,42 @@ def test_build_invoice_create_body_shape():
 
 
 def test_build_invoice_create_body_coerces_types():
-    body = _build_invoice_create_body(client_id="7", product="X", amount="12.5", date="2026-01-01")
+    body = build_invoice_create_body(client_id="7", product="X", amount="12.5", date="2026-01-01")
     assert body["data"]["entity"]["id"] == 7
     assert body["data"]["items_list"][0]["net_price"] == 12.5
 
 
 def test_build_client_create_body_keeps_optional_fields():
-    body = _build_client_create_body(name="ACME", email="a@b.it", vat="IT123")
+    body = build_client_create_body(name="ACME", email="a@b.it", vat="IT123")
     assert body["data"]["name"] == "ACME"
     assert body["data"]["email"] == "a@b.it"
     assert body["data"]["vat_number"] == "IT123"
 
 
 def test_build_client_create_body_drops_empty_optionals():
-    body = _build_client_create_body(name="Solo Name", email=None, vat="")
+    body = build_client_create_body(name="Solo Name", email=None, vat="")
     assert body["data"] == {"name": "Solo Name", "type": "company"}
 
 
 def test_build_invoice_update_body_only_touches_payment_status():
-    body = _build_invoice_update_body("paid")
+    body = build_invoice_update_body("paid")
     assert body == {"data": {"payment_status": "paid"}}
 
 
 def test_summarize_created_invoice_combines_number_and_numeration():
-    assert _summarize_created_invoice(
+    assert summarize_created_invoice(
         {"id": 99, "number": 3, "numeration": "/B", "date": "2026-05-19"}
     ) == {"id": 99, "number": "3/B", "date": "2026-05-19"}
 
 
 def test_summarize_created_invoice_handles_missing_numeration():
-    assert _summarize_created_invoice({"id": 1, "number": 5})["number"] == 5
+    assert summarize_created_invoice({"id": 1, "number": 5})["number"] == 5
 
 
 # ---------- list-invoices query builder ----------
 
 def test_build_invoice_query_no_filters_omits_q():
-    params = _build_invoice_query(year=None, status=None)
+    params = build_invoice_query(year=None, status=None)
     assert params["type"] == "invoice"
     assert "q" not in params  # 422 if q is sent empty
 
@@ -192,29 +194,29 @@ def test_build_invoice_query_no_filters_omits_q():
 def test_build_invoice_query_overdue_requests_payments_list_only():
     # FiC rejects `payment_status` inside `q` with "Invalid query syntax".
     # Overdue must be enforced client-side only — the query must NOT contain it.
-    params = _build_invoice_query(year=None, status=None, overdue=True)
+    params = build_invoice_query(year=None, status=None, overdue=True)
     assert "payments_list" in params["fields"]
     assert "payment_status" not in params.get("q", "")
     assert "q" not in params  # no other filter => no q at all
 
 
 def test_build_invoice_query_combines_year_and_overdue():
-    params = _build_invoice_query(year=2026, status=None, overdue=True)
+    params = build_invoice_query(year=2026, status=None, overdue=True)
     assert params["q"] == "year(date) = 2026"
     assert "payment_status" not in params["q"]
     assert "payments_list" in params["fields"]
 
 
-# ---------- _is_overdue ----------
+# ---------- is_overdue ----------
 
 def test_is_overdue_true_when_unpaid_due_in_past():
     doc = {"payments_list": [{"due_date": "2026-01-01", "status": "not_paid"}]}
-    assert _is_overdue(doc, today="2026-05-19") is True
+    assert is_overdue(doc, today="2026-05-19") is True
 
 
 def test_is_overdue_false_when_due_in_future():
     doc = {"payments_list": [{"due_date": "2099-01-01", "status": "not_paid"}]}
-    assert _is_overdue(doc, today="2026-05-19") is False
+    assert is_overdue(doc, today="2026-05-19") is False
 
 
 def test_is_overdue_ignores_paid_payments():
@@ -224,11 +226,11 @@ def test_is_overdue_ignores_paid_payments():
             {"due_date": "2099-01-01", "status": "not_paid"},
         ]
     }
-    assert _is_overdue(doc, today="2026-05-19") is False
+    assert is_overdue(doc, today="2026-05-19") is False
 
 
 def test_is_overdue_handles_missing_payments_list():
-    assert _is_overdue({}, today="2026-05-19") is False
+    assert is_overdue({}, today="2026-05-19") is False
 
 
 # ---------- Exit code conventions ----------
