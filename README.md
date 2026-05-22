@@ -1,4 +1,4 @@
-[![PyPI version](https://img.shields.io/pypi/v/fatture-cli.svg)](https://pypi.org/project/fatture-cli/)
+[![PyPI version](https://img.shields.io/pypi/v/mayai-fatture-cli.svg)](https://pypi.org/project/mayai-fatture-cli/)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Built for AI agents](https://img.shields.io/badge/Built%20for-AI%20agents-purple)](https://mayai.it)
