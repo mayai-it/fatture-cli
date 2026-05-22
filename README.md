@@ -1,3 +1,7 @@
+[![PyPI version](https://img.shields.io/pypi/v/fatture-cli.svg)](https://pypi.org/project/fatture-cli/)
+[![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Built for AI agents](https://img.shields.io/badge/Built%20for-AI%20agents-purple)](https://mayai.it)
 # fatture-cli
 
 Command-line client for the [Fatture in Cloud](https://developers.fattureincloud.it/)
