@@ -31,11 +31,25 @@ def test_invoice_parses_minimal_payload():
     assert inv.entity is None
 
 
-def test_invoice_missing_required_field_raises():
-    with pytest.raises(ValidationError):
-        Invoice.model_validate({"id": 1})  # date is required
-    with pytest.raises(ValidationError):
-        Invoice.model_validate({"date": "2026-01-15"})  # id is required
+def test_invoice_validation_error_on_missing_required_fields():
+    # Both id and date are required. The error must name the missing field so
+    # API debugging stays readable.
+    with pytest.raises(ValidationError) as exc_id:
+        Invoice.model_validate({"date": "2026-01-15"})
+    errors_id = exc_id.value.errors()
+    assert any(e["loc"] == ("id",) and e["type"] == "missing" for e in errors_id)
+
+    with pytest.raises(ValidationError) as exc_date:
+        Invoice.model_validate({"id": 1})
+    errors_date = exc_date.value.errors()
+    assert any(e["loc"] == ("date",) and e["type"] == "missing" for e in errors_date)
+
+    # Empty payload — both must be reported.
+    with pytest.raises(ValidationError) as exc_both:
+        Invoice.model_validate({})
+    locs = {e["loc"] for e in exc_both.value.errors() if e["type"] == "missing"}
+    assert ("id",) in locs
+    assert ("date",) in locs
 
 
 def test_invoice_tolerates_unknown_fields():

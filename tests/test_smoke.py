@@ -5,6 +5,9 @@ from __future__ import annotations
 import subprocess
 import sys
 
+import pytest
+from pydantic import ValidationError
+
 from fatture_cli.api import endpoints
 from fatture_cli.output.formatter import _is_empty, _strip_empty
 from fatture_cli.transforms.client import (
@@ -96,20 +99,18 @@ def test_summarize_invoice_full_payload():
     }
 
 
-def test_summarize_invoice_handles_empty_dict():
-    out = summarize_invoice({})
-    assert out == {
-        "id": None,
-        "date": None,
-        "number": None,
-        "client": None,
-        "total": None,
-        "status": None,
-    }
+def test_summarize_invoice_raises_validation_error_on_missing_required_fields():
+    # Invoice requires id + date. An empty dict must not silently succeed —
+    # the strict model is what prevents downstream off-by-cents bugs from
+    # un-validated payloads.
+    with pytest.raises(ValidationError):
+        summarize_invoice({})
 
 
 def test_summarize_invoice_missing_numeration_and_entity():
-    out = summarize_invoice({"id": 99, "number": 42})
+    # Realistic minimal payload: only the required fields plus `number`.
+    # `numeration` and `entity` absent must surface as None in the summary.
+    out = summarize_invoice({"id": 99, "date": "2026-01-15", "number": 42})
     assert out["id"] == 99
     assert out["number"] == 42
     assert out["client"] is None
@@ -180,7 +181,9 @@ def test_summarize_created_invoice_combines_number_and_numeration():
 
 
 def test_summarize_created_invoice_handles_missing_numeration():
-    assert summarize_created_invoice({"id": 1, "number": 5})["number"] == 5
+    assert summarize_created_invoice(
+        {"id": 1, "date": "2026-01-15", "number": 5}
+    )["number"] == 5
 
 
 # ---------- list-invoices query builder ----------
