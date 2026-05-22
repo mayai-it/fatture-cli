@@ -30,11 +30,35 @@ from fatture_cli.api.endpoints import (
     OAUTH_TOKEN_URL,
 )
 
-CONFIG_DIR = Path.home() / ".config" / "mayai-cli" / "fatture"
-CREDENTIALS_PATH = CONFIG_DIR / "credentials.json"
-
 DEFAULT_CALLBACK_HOST = "127.0.0.1"
 DEFAULT_CALLBACK_PORT = 8080
+
+
+def get_config_dir() -> Path:
+    """Resolve the directory where credentials are stored.
+
+    Resolution order:
+    1. ``$XDG_CONFIG_HOME/mayai-cli/fatture`` if XDG_CONFIG_HOME is set
+       (Linux/freedesktop convention; respected on any OS that exports it).
+    2. ``~/.config/mayai-cli/fatture`` — on Windows, ``Path.home()`` resolves
+       via ``USERPROFILE`` (and ``HOMEDRIVE``+``HOMEPATH`` as fallback).
+    3. ``./.fatture-cli`` — degraded fallback used only when neither HOME
+       nor USERPROFILE is set (e.g. minimal CI / sandbox environments).
+       Without this, importing the module itself crashes before the CLI
+       can emit a sensible error.
+    """
+    xdg = os.environ.get("XDG_CONFIG_HOME")
+    if xdg:
+        return Path(xdg) / "mayai-cli" / "fatture"
+    try:
+        return Path.home() / ".config" / "mayai-cli" / "fatture"
+    except RuntimeError:
+        return Path.cwd() / ".fatture-cli"
+
+
+def get_credentials_file() -> Path:
+    """Absolute path to the persisted credentials JSON file."""
+    return get_config_dir() / "credentials.json"
 
 
 @dataclass
@@ -64,25 +88,28 @@ class Credentials:
 
 
 def load_credentials() -> Credentials | None:
-    if not CREDENTIALS_PATH.exists():
+    path = get_credentials_file()
+    if not path.exists():
         return None
-    with CREDENTIALS_PATH.open("r", encoding="utf-8") as fh:
+    with path.open("r", encoding="utf-8") as fh:
         return Credentials.from_dict(json.load(fh))
 
 
 def save_credentials(creds: Credentials) -> None:
-    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    path = get_credentials_file()
+    path.parent.mkdir(parents=True, exist_ok=True)
     # Write atomically and lock down to 0600 so other users can't read tokens.
-    tmp = CREDENTIALS_PATH.with_suffix(".tmp")
+    tmp = path.with_suffix(".tmp")
     with tmp.open("w", encoding="utf-8") as fh:
         json.dump(creds.to_dict(), fh, indent=2)
     os.chmod(tmp, stat.S_IRUSR | stat.S_IWUSR)
-    tmp.replace(CREDENTIALS_PATH)
+    tmp.replace(path)
 
 
 def delete_credentials() -> bool:
-    if CREDENTIALS_PATH.exists():
-        CREDENTIALS_PATH.unlink()
+    path = get_credentials_file()
+    if path.exists():
+        path.unlink()
         return True
     return False
 
