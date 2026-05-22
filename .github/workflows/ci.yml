@@ -28,6 +28,14 @@ jobs:
       - name: Install dependencies
         run: pip install -e ".[dev]"
 
+      - name: Print env versions (debug)
+        run: |
+          python --version
+          python -c "import sys; print('platform:', sys.platform)"
+          python -c "import typing_extensions; print('typing_extensions:', typing_extensions.__version__)"
+          python -c "import pydantic; print('pydantic:', pydantic.__version__)"
+          python -c "import pydantic_core; print('pydantic_core:', pydantic_core.__version__)"
+
       - name: Lint
         run: ruff check fatture_cli/
 
