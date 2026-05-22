@@ -214,8 +214,52 @@ class APIClient:
     def get(self, path: str, params: dict | None = None) -> dict | list | None:
         return self.request("GET", path, params=params)
 
+    def get_resource(self, path: str, params: dict | None = None) -> dict[str, Any]:
+        """GET expecting a single-resource response (top-level dict).
+
+        Use this instead of ``get()`` when the call site needs ``.get()`` on
+        the result or wants to pass it to ``Model.model_validate()``. Raises
+        ``APIError`` if the API returns anything other than a JSON object.
+        """
+        result = self.request("GET", path, params=params)
+        if not isinstance(result, dict):
+            raise APIError(
+                0,
+                f"Expected dict response, got {type(result).__name__}",
+                result,
+            )
+        return result
+
+    def get_paginated(self, path: str, params: dict | None = None) -> dict[str, Any]:
+        """GET expecting a paginated-list response.
+
+        The envelope is the same dict shape as ``get_resource()`` — distinct
+        method only to document intent at call sites that page-walk via
+        ``data`` / ``last_page`` keys. Raises if ``data`` is missing or not a list.
+        """
+        result = self.get_resource(path, params=params)
+        data = result.get("data")
+        if data is not None and not isinstance(data, list):
+            raise APIError(
+                0,
+                f"Expected 'data' to be a list, got {type(data).__name__}",
+                result,
+            )
+        return result
+
     def post(self, path: str, json: Any = None) -> dict | list | None:
         return self.request("POST", path, json=json)
+
+    def post_resource(self, path: str, json: Any = None) -> dict[str, Any]:
+        """POST expecting a single-resource response (top-level dict). See ``get_resource``."""
+        result = self.request("POST", path, json=json)
+        if not isinstance(result, dict):
+            raise APIError(
+                0,
+                f"Expected dict response, got {type(result).__name__}",
+                result,
+            )
+        return result
 
     def put(self, path: str, json: Any = None) -> dict | list | None:
         return self.request("PUT", path, json=json)

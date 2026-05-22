@@ -177,7 +177,7 @@ def auth_login(
     # with a future `auth use-company` command.
     try:
         with APIClient(creds, verbose=ctx.verbose) as client:
-            companies = client.get(USER_COMPANIES) or {}
+            companies = client.get_resource(USER_COMPANIES)
         first = (companies.get("data") or {}).get("companies") or []
         if first:
             creds.company_id = int(first[0]["id"])
@@ -289,7 +289,7 @@ def _list_invoices(
         while True:
             params["page"] = str(page)
             try:
-                payload = client.get(path, params=params) or {}
+                payload = client.get_paginated(path, params=params)
             except APIError as exc:
                 error(exc.message)
                 sys.exit(1)
@@ -340,7 +340,7 @@ def _list_clients(ctx: CLIContext, limit: int | None) -> None:
         while True:
             params["page"] = str(page)
             try:
-                payload = client.get(path, params=params) or {}
+                payload = client.get_paginated(path, params=params)
             except APIError as exc:
                 error(exc.message)
                 sys.exit(1)
@@ -386,7 +386,7 @@ def _list_products(ctx: CLIContext, limit: int | None) -> None:
         while True:
             params["page"] = str(page)
             try:
-                payload = client.get(path, params=params) or {}
+                payload = client.get_paginated(path, params=params)
             except APIError as exc:
                 error(exc.message)
                 sys.exit(1)
@@ -419,7 +419,7 @@ def _get_invoice(ctx: CLIContext, invoice_id: int) -> None:
 
         path = INVOICE_DETAIL.format(company_id=company_id, document_id=invoice_id)
         try:
-            payload = client.get(path, params={"type": "invoice"}) or {}
+            payload = client.get_resource(path, params={"type": "invoice"})
         except APIError as exc:
             error(exc.message)
             sys.exit(1)
@@ -441,7 +441,7 @@ def _get_client(ctx: CLIContext, client_id: int) -> None:
 
         path = CLIENT_DETAIL.format(company_id=company_id, client_id=client_id)
         try:
-            payload = client.get(path) or {}
+            payload = client.get_resource(path)
         except APIError as exc:
             error(exc.message)
             sys.exit(1)
@@ -463,7 +463,7 @@ def _get_product(ctx: CLIContext, product_id: int) -> None:
 
         path = PRODUCT_DETAIL.format(company_id=company_id, product_id=product_id)
         try:
-            payload = client.get(path) or {}
+            payload = client.get_resource(path)
         except APIError as exc:
             error(exc.message)
             sys.exit(1)
@@ -494,7 +494,7 @@ def _create_invoice(
 
         path = INVOICES_LIST.format(company_id=company_id)
         try:
-            payload = client.post(path, json=body) or {}
+            payload = client.post_resource(path, json=body)
         except APIError as exc:
             error(exc.message)
             sys.exit(1)
@@ -523,7 +523,7 @@ def _create_client(
 
         path = CLIENTS_LIST.format(company_id=company_id)
         try:
-            payload = client.post(path, json=body) or {}
+            payload = client.post_resource(path, json=body)
         except APIError as exc:
             error(exc.message)
             sys.exit(1)
@@ -597,7 +597,7 @@ def _search_clients(ctx: CLIContext, query: str, limit: int | None) -> None:
         while True:
             params["page"] = str(page)
             try:
-                payload = client.get(path, params=params) or {}
+                payload = client.get_paginated(path, params=params)
             except APIError as exc:
                 error(exc.message)
                 sys.exit(1)
@@ -620,13 +620,13 @@ def _search_clients(ctx: CLIContext, query: str, limit: int | None) -> None:
 def _fetch_invoice_raw(client: APIClient, company_id: int, invoice_id: int) -> dict:
     """Return the raw `data` payload for an invoice — same shape FatturaPA needs."""
     path = INVOICE_DETAIL.format(company_id=company_id, document_id=invoice_id)
-    payload = client.get(path, params={"type": "invoice"}) or {}
+    payload = client.get_resource(path, params={"type": "invoice"})
     return payload.get("data") or {}
 
 
 def _fetch_active_company(client: APIClient, company_id: int) -> dict:
     """Return the active company dict from /user/companies (matching company_id)."""
-    payload = client.get(USER_COMPANIES) or {}
+    payload = client.get_resource(USER_COMPANIES)
     companies = (payload.get("data") or {}).get("companies") or []
     for c in companies:
         if int(c.get("id") or 0) == company_id:

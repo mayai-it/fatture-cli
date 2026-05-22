@@ -4,13 +4,16 @@ from __future__ import annotations
 
 from typing import Any
 
+from fatture_cli.models.product import Product
+
 
 def summarize_product(doc: dict[str, Any]) -> dict[str, Any]:
     """Compact list-view shape: id, name, price, vat_type."""
-    vat = doc.get("vat") or {}
+    product = Product.model_validate(doc)
+    vat = product.vat or product.default_vat or {}
     return {
-        "id": doc.get("id"),
-        "name": doc.get("name"),
-        "price": doc.get("net_price"),
+        "id": product.id,
+        "name": product.name,
+        "price": product.net_price,
         "vat_type": vat.get("description") or vat.get("value"),
     }

@@ -1,14 +1,16 @@
 """Pure transforms for invoice payloads.
 
 Builders translate user/CLI inputs into Fatture in Cloud request bodies and
-query params; summarizers/detailers collapse FiC response payloads into the
-compact dict shapes the CLI and MCP server emit. No I/O, no APIClient.
+query params; summarizers/detailers parse FiC response payloads through
+Pydantic models (validation + Decimal coercion for money) and collapse them
+into the compact dict shapes the CLI and MCP server emit. No I/O, no APIClient.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
+from fatture_cli.models.invoice import Invoice
 from fatture_cli.transforms.payment import summarize_payment
 
 _INVOICE_FIELDS = "id,number,numeration,date,entity,amount_net,amount_gross,status"
@@ -54,6 +56,9 @@ def is_overdue(doc: dict[str, Any], today: str) -> bool:
     lexicographically the same way as chronologically, so we avoid parsing.
     A payment whose status is "paid" never counts as overdue, regardless of
     its due date.
+
+    Operates on raw dicts (no Invoice model) so the list-invoices loop can
+    cheaply filter before paying the full validation cost.
     """
     for p in doc.get("payments_list") or []:
         if (p.get("status") or "").lower() == "paid":
@@ -65,51 +70,57 @@ def is_overdue(doc: dict[str, Any], today: str) -> bool:
 
 
 def summarize_invoice(doc: dict[str, Any]) -> dict[str, Any]:
-    """Compact list-view shape: id, date, number, client, total, status."""
-    entity = doc.get("entity") or {}
-    number = doc.get("number")
-    numeration = doc.get("numeration")
-    full_number = f"{number}{numeration}" if numeration else number
+    """Compact list-view shape: id, date, number, client, total, status.
+
+    Validates through the ``Invoice`` model so monetary fields land as
+    ``Decimal`` and dates as ``date`` regardless of whether the API sent
+    numbers, strings, or ISO dates.
+    """
+    inv = Invoice.model_validate(doc)
+    entity = inv.entity or {}
+    full_number = f"{inv.number}{inv.numeration}" if inv.numeration else inv.number
     return {
-        "id": doc.get("id"),
-        "date": doc.get("date"),
+        "id": inv.id,
+        "date": inv.date.isoformat(),
         "number": full_number,
         "client": entity.get("name"),
-        "total": doc.get("amount_gross"),
-        "status": doc.get("status"),
+        "total": inv.amount_gross,
+        "status": inv.status,
     }
 
 
 def detail_invoice(doc: dict[str, Any]) -> dict[str, Any]:
     """Full single-invoice view including line items and payment schedule."""
-    entity = doc.get("entity") or {}
-    number = doc.get("number")
-    numeration = doc.get("numeration")
-    full_number = f"{number}{numeration}" if numeration else number
+    inv = Invoice.model_validate(doc)
+    entity = inv.entity or {}
+    currency = inv.currency or {}
+    payment_method = inv.payment_method or {}
+
+    full_number = f"{inv.number}{inv.numeration}" if inv.numeration else inv.number
 
     lines: list[dict[str, Any]] = []
-    for item in doc.get("items_list") or []:
+    for item in inv.items_list or []:
         lines.append({
-            "description": item.get("name") or item.get("description"),
-            "qty": item.get("qty"),
-            "amount_net": item.get("net_price"),
-            "amount_gross": item.get("gross_price"),
+            "description": item.name or item.description,
+            "qty": item.qty,
+            "amount_net": item.net_price,
+            "amount_gross": item.gross_price,
         })
 
-    payments = [summarize_payment(p) for p in doc.get("payments_list") or []]
+    payments = [summarize_payment(p) for p in inv.payments_list or []]
 
     return {
-        "id": doc.get("id"),
-        "date": doc.get("date"),
+        "id": inv.id,
+        "date": inv.date.isoformat(),
         "number": full_number,
         "client": entity.get("name"),
         "client_id": entity.get("id"),
         "lines": lines,
-        "amount_net": doc.get("amount_net"),
-        "total": doc.get("amount_gross"),
-        "currency": (doc.get("currency") or {}).get("id"),
-        "status": doc.get("status"),
-        "payment_method": (doc.get("payment_method") or {}).get("name"),
+        "amount_net": inv.amount_net,
+        "total": inv.amount_gross,
+        "currency": currency.get("id"),
+        "status": inv.status,
+        "payment_method": payment_method.get("name"),
         "payments": payments,
     }
 
@@ -149,11 +160,10 @@ def build_invoice_update_body(status: str) -> dict[str, Any]:
 
 def summarize_created_invoice(doc: dict[str, Any]) -> dict[str, Any]:
     """Compact response for `create invoice`: just enough to confirm + reference."""
-    number = doc.get("number")
-    numeration = doc.get("numeration")
-    full_number = f"{number}{numeration}" if numeration else number
+    inv = Invoice.model_validate(doc)
+    full_number = f"{inv.number}{inv.numeration}" if inv.numeration else inv.number
     return {
-        "id": doc.get("id"),
+        "id": inv.id,
         "number": full_number,
-        "date": doc.get("date"),
+        "date": inv.date.isoformat(),
     }

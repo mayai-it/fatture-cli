@@ -87,7 +87,7 @@ def _paginate(client: APIClient, path: str, params: dict[str, str]) -> list[dict
     page = 1
     while True:
         params["page"] = str(page)
-        payload = client.get(path, params=params) or {}
+        payload = client.get_paginated(path, params=params)
         for doc in payload.get("data") or []:
             out.append(doc)
         last_page = payload.get("last_page") or 1
@@ -116,7 +116,7 @@ def fatture_list_invoices(
     try:
         while True:
             params["page"] = str(page)
-            payload = client.get(path, params=params) or {}
+            payload = client.get_paginated(path, params=params)
             for doc in payload.get("data") or []:
                 if overdue:
                     if (doc.get("status") or "").lower() == "paid":
@@ -140,7 +140,7 @@ def fatture_get_invoice(ctx: Context, invoice_id: int) -> dict:
     client, company_id = _require(ctx)
     path = INVOICE_DETAIL.format(company_id=company_id, document_id=invoice_id)
     try:
-        payload = client.get(path, params={"type": "invoice"}) or {}
+        payload = client.get_resource(path, params={"type": "invoice"})
     except APIError as exc:
         raise ToolError(exc.message) from exc
     return detail_invoice(payload.get("data") or {})
@@ -162,7 +162,7 @@ def fatture_list_clients(ctx: Context, limit: int = 50) -> list[dict]:
     try:
         while True:
             params["page"] = str(page)
-            payload = client.get(path, params=params) or {}
+            payload = client.get_paginated(path, params=params)
             for doc in payload.get("data") or []:
                 rows.append(summarize_client(doc))
                 if len(rows) >= limit:
@@ -208,7 +208,7 @@ def fatture_create_invoice(
     body = build_invoice_create_body(client_id, product, amount, issue_date)
     path = INVOICES_LIST.format(company_id=company_id)
     try:
-        payload = client.post(path, json=body) or {}
+        payload = client.post_resource(path, json=body)
     except APIError as exc:
         raise ToolError(exc.message) from exc
     return summarize_created_invoice(payload.get("data") or {})
@@ -226,7 +226,7 @@ def fatture_create_client(
     body = build_client_create_body(name, email, vat)
     path = CLIENTS_LIST.format(company_id=company_id)
     try:
-        payload = client.post(path, json=body) or {}
+        payload = client.post_resource(path, json=body)
     except APIError as exc:
         raise ToolError(exc.message) from exc
     data = payload.get("data") or {}

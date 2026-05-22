@@ -4,35 +4,39 @@ from __future__ import annotations
 
 from typing import Any
 
+from fatture_cli.models.client import Client
+
 
 def summarize_client(doc: dict[str, Any]) -> dict[str, Any]:
     """Compact list-view shape: id, name, email, tax_code."""
+    client = Client.model_validate(doc)
     return {
-        "id": doc.get("id"),
-        "name": doc.get("name"),
-        "email": doc.get("email"),
-        "tax_code": doc.get("tax_code"),
+        "id": client.id,
+        "name": client.name,
+        "email": client.email,
+        "tax_code": client.tax_code,
     }
 
 
 def detail_client(doc: dict[str, Any]) -> dict[str, Any]:
     """Full single-client view including address breakdown."""
+    client = Client.model_validate(doc)
     address = {
-        "street": doc.get("address_street"),
-        "postal_code": doc.get("address_postal_code"),
-        "city": doc.get("address_city"),
-        "province": doc.get("address_province"),
-        "extra": doc.get("address_extra"),
-        "country": doc.get("country"),
+        "street": client.address_street,
+        "postal_code": client.address_postal_code,
+        "city": client.address_city,
+        "province": client.address_province,
+        "extra": client.address_extra,
+        "country": client.country,
     }
     return {
-        "id": doc.get("id"),
-        "name": doc.get("name"),
-        "email": doc.get("email"),
-        "certified_email": doc.get("certified_email"),
-        "phone": doc.get("phone"),
-        "tax_code": doc.get("tax_code"),
-        "vat_number": doc.get("vat_number"),
+        "id": client.id,
+        "name": client.name,
+        "email": client.email,
+        "certified_email": client.certified_email,
+        "phone": client.phone,
+        "tax_code": client.tax_code,
+        "vat_number": client.vat_number,
         "address": address,
     }
 
