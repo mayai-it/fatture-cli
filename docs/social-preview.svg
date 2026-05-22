@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640">
+  <!-- GitHub social preview: 1280x640. Dark base #08091B per mayai.it. -->
+  <rect width="1280" height="640" fill="#08091B"/>
+
+  <!-- Subtle grid: 80px cells, low alpha — frames the type, no gradients. -->
+  <g stroke="#FFFFFF" stroke-width="1" opacity="0.04">
+    <path d="M0 80H1280M0 160H1280M0 240H1280M0 320H1280M0 400H1280M0 480H1280M0 560H1280"/>
+    <path d="M80 0V640M160 0V640M240 0V640M320 0V640M400 0V640M480 0V640M560 0V640M640 0V640M720 0V640M800 0V640M880 0V640M960 0V640M1040 0V640M1120 0V640M1200 0V640"/>
+  </g>
+
+  <!-- Star mark, four-pointed (placeholder for MayAI logo until vendored). -->
+  <g transform="translate(120 280)">
+    <path d="M40 0L48 32L80 40L48 48L40 80L32 48L0 40L32 32Z" fill="#FFFFFF"/>
+  </g>
+
+  <!-- Wordmark: fatture-cli, monospaced sans, no effects. -->
+  <text x="240" y="335"
+        font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace"
+        font-size="120"
+        font-weight="700"
+        fill="#FFFFFF"
+        letter-spacing="-3">fatture-cli</text>
+
+  <!-- Subtitle, lighter weight, lower contrast. -->
+  <text x="240" y="395"
+        font-family="ui-sans-serif, -apple-system, 'Segoe UI', Inter, sans-serif"
+        font-size="32"
+        font-weight="400"
+        fill="#9AA0B3"
+        letter-spacing="0.2">MCP &amp; CLI for Fatture in Cloud</text>
+
+  <!-- Footer attribution, bottom-left, small caps feel via letter-spacing. -->
+  <text x="120" y="585"
+        font-family="ui-sans-serif, -apple-system, 'Segoe UI', Inter, sans-serif"
+        font-size="22"
+        font-weight="500"
+        fill="#6A7088"
+        letter-spacing="3">mayai.it</text>
+
+  <!-- Hairline rule above the footer, very low alpha — purely structural. -->
+  <line x1="120" y1="545" x2="320" y2="545" stroke="#FFFFFF" stroke-width="1" opacity="0.15"/>
+</svg>

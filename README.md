@@ -2,6 +2,8 @@
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Built for AI agents](https://img.shields.io/badge/Built%20for-AI%20agents-purple)](https://mayai.it)
+[![Tests](https://github.com/mayai-it/fatture-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/mayai-it/fatture-cli/actions/workflows/ci.yml)
+[![mypy](https://img.shields.io/badge/mypy-strict-blue)](https://mypy-lang.org/)
 # fatture-cli
 
 Command-line client for the [Fatture in Cloud](https://developers.fattureincloud.it/)
@@ -25,6 +27,38 @@ for both:
   with `0600` permissions.
 
 Part of [MayAI](https://mayai.it).
+
+## Engineering notes
+
+A few choices worth calling out:
+
+- **All monetary fields are `Decimal`, not `float`.** Fatture in Cloud's
+  official Python SDK uses `float` for amounts; we override to `Decimal`
+  to avoid the `0.1 + 0.2 = 0.30000000000000004` problem when talking
+  to Italian accountants.
+
+- **MCP server is decoupled from the CLI.** Shared helpers live in
+  `fatture_cli.transforms`, so the CLI and the MCP server depend on
+  transforms — not on each other. Either can change without breaking
+  the other.
+
+- **Retry on rate limit (429) and 5xx with `Retry-After`** handling
+  for both delta-seconds and HTTP-date formats (RFC 7231).
+
+- **Config paths resolved lazily** with three-tier fallback:
+  `$XDG_CONFIG_HOME` → `~/.config` → `./.fatture-cli`. Works in sandboxed
+  environments without `HOME`/`USERPROFILE` (CI runners, Docker minimal,
+  restricted subprocess contexts).
+
+- **mypy strict with zero unmotivated `# type: ignore`.** Includes
+  `disallow_subclassing_any`, `strict_equality`, `extra_checks`.
+  Type regressions fail CI.
+
+Quality bar:
+
+- Tests: 96, running on Ubuntu/macOS/Windows × Python 3.11/3.12/3.13.
+- Coverage: ~70%, critical paths (MCP server, API client) >85%.
+- Italian-native domain knowledge (PEC, fatturazione elettronica, FatturaPA XML).
 
 ## Requirements
 

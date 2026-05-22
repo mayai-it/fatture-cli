@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "mayai-fatture-cli"
-version = "0.1.0"
+version = "0.2.0"
 description = "Fatture in Cloud CLI — built for AI agents and developers. Manage invoices, clients, and products from the terminal."
 readme = "README.md"
 requires-python = ">=3.11"
