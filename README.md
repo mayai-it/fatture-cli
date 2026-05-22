@@ -9,7 +9,22 @@ API, built for both humans and AI agents. Designed to be context-efficient: the
 default output strips empty fields, and `--json` produces NDJSON suitable for
 piping into LLMs or jq.
 
-Part of [MayAI CLI](https://mayai.it).
+## Why this exists
+
+Most CLIs for Italian invoicing services are wrappers around heavy SDKs, 
+not designed for terminal workflows or AI agents. `fatture-cli` is built 
+for both:
+
+- 🤖 **Agent-friendly**: NDJSON output, stable exit codes, errors on stderr 
+  — pipe it into Claude, jq, or any LLM workflow.
+- 👤 **Human-friendly**: compact text output that strips empty fields, 
+  one command per common task.
+- 🇮🇹 **Italian-native**: built for the real workflows of Italian SMEs 
+  and accounting studios.
+- 🔐 **Self-hosted auth**: OAuth2 round-trip handled locally, tokens stored 
+  with `0600` permissions.
+
+Part of [MayAI](https://mayai.it).
 
 ## Requirements
 
