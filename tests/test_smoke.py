@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
@@ -238,21 +240,39 @@ def test_is_overdue_handles_missing_payments_list():
 
 # ---------- Exit code conventions ----------
 
-def test_exit_code_two_for_missing_auth():
+def _auth_less_env(tmp_path: Path) -> dict[str, str]:
+    """Inherit the parent env but redirect every config-dir lookup to a
+    guaranteed-nonexistent path.
+
+    Replacing ``os.environ`` wholesale (instead of overlaying) strips
+    SystemRoot/WINDIR on Windows, which breaks winsock initialization and
+    surfaces as ``OSError: [WinError 10106]`` the moment asyncio is imported
+    (e.g. transitively via pydantic). Inherit + selectively override.
+    """
+    nonexistent_home = str(tmp_path / "no_such_home")
+    return {
+        **os.environ,
+        "HOME": nonexistent_home,
+        "USERPROFILE": nonexistent_home,
+        "XDG_CONFIG_HOME": nonexistent_home,
+    }
+
+
+def test_exit_code_two_for_missing_auth(tmp_path: Path) -> None:
     # `fatture list invoices` with no credentials must exit 2 (auth error).
     result = subprocess.run(
         [sys.executable, "-m", "fatture_cli.main", "list", "invoices"],
-        env={"HOME": "/tmp/__fatture_cli_no_such_home__", "PATH": "/usr/bin:/bin"},
+        env=_auth_less_env(tmp_path),
         capture_output=True,
         text=True,
     )
     assert result.returncode == 2, f"stderr={result.stderr!r}"
 
 
-def test_exit_code_two_for_auth_status_when_logged_out():
+def test_exit_code_two_for_auth_status_when_logged_out(tmp_path: Path) -> None:
     result = subprocess.run(
         [sys.executable, "-m", "fatture_cli.main", "auth", "status"],
-        env={"HOME": "/tmp/__fatture_cli_no_such_home__", "PATH": "/usr/bin:/bin"},
+        env=_auth_less_env(tmp_path),
         capture_output=True,
         text=True,
     )

@@ -28,16 +28,6 @@ jobs:
       - name: Install dependencies
         run: pip install -e ".[dev]"
 
-      - name: Print env versions (debug)
-        shell: bash
-        run: |
-          python --version
-          python -c "import sys; print('platform:', sys.platform)"
-          python -c "import typing_extensions; print('typing_extensions:', getattr(typing_extensions, '__version__', 'unknown'))"
-          python -c "import pydantic; print('pydantic:', pydantic.__version__)"
-          python -c "import pydantic_core; print('pydantic_core:', pydantic_core.__version__)"
-          python -c "import importlib.metadata as m; print('te-meta:', m.version('typing_extensions'))"
-
       - name: Lint
         run: ruff check fatture_cli/
 
