@@ -20,6 +20,36 @@ if TYPE_CHECKING:
     from fatture_cli.auth.oauth import Credentials
 
 
+RETRIABLE_STATUSES = frozenset({429, 502, 503, 504})
+
+
+def _parse_retry_after(value: str | None) -> float | None:
+    """Parse a Retry-After header value (delta-seconds or HTTP-date).
+
+    Returns a non-negative float in seconds, or None if the header is
+    missing or unparseable.
+    """
+    if not value:
+        return None
+    value = value.strip()
+    if not value:
+        return None
+    try:
+        return max(float(value), 0.0)
+    except ValueError:
+        pass
+    try:
+        from datetime import UTC, datetime
+        from email.utils import parsedate_to_datetime
+
+        target = parsedate_to_datetime(value)
+        if target.tzinfo is None:
+            target = target.replace(tzinfo=UTC)
+        return max((target - datetime.now(UTC)).total_seconds(), 0.0)
+    except (TypeError, ValueError):
+        return None
+
+
 def _extract_error_message(payload: Any) -> str | None:
     """Pull a human-readable message out of a Fatture in Cloud error body.
 
@@ -59,9 +89,11 @@ class APIClient:
         base_url: str = API_BASE_URL,
         timeout: float = 30.0,
         verbose: bool = False,
+        max_retries: int = 3,
     ) -> None:
         self._credentials = credentials
         self._verbose = verbose
+        self._max_retries = max(0, max_retries)
         self._http = httpx.Client(
             base_url=base_url,
             timeout=timeout,
@@ -106,19 +138,10 @@ class APIClient:
         self._ensure_fresh_token()
 
         started = time.perf_counter()
-        response = self._http.request(
-            method,
-            path,
-            params=params,
-            json=json,
-            headers=self._auth_headers(),
-        )
-        # One automatic retry after a 401: refresh, then resend exactly once.
-        if response.status_code == 401:
-            from fatture_cli.auth.oauth import refresh_access_token, save_credentials
+        attempt = 0
+        refreshed_on_401 = False
 
-            refresh_access_token(self._credentials)
-            save_credentials(self._credentials)
+        while True:
             response = self._http.request(
                 method,
                 path,
@@ -126,6 +149,32 @@ class APIClient:
                 json=json,
                 headers=self._auth_headers(),
             )
+
+            # 401: refresh the access token and resend once. Does not
+            # consume a retry slot — this is a credential-recovery path.
+            if response.status_code == 401 and not refreshed_on_401:
+                from fatture_cli.auth.oauth import refresh_access_token, save_credentials
+
+                refresh_access_token(self._credentials)
+                save_credentials(self._credentials)
+                refreshed_on_401 = True
+                continue
+
+            if response.status_code in RETRIABLE_STATUSES and attempt < self._max_retries:
+                sleep_s = self._retry_delay(response, attempt)
+                if self._verbose:
+                    import sys
+
+                    print(
+                        f"[fatture] retry {attempt + 1}/{self._max_retries} "
+                        f"on {response.status_code} after {sleep_s:.1f}s",
+                        file=sys.stderr,
+                    )
+                time.sleep(sleep_s)
+                attempt += 1
+                continue
+
+            break
 
         elapsed_ms = (time.perf_counter() - started) * 1000
         if self._verbose:
@@ -149,6 +198,18 @@ class APIClient:
         if response.status_code == 204 or not response.content:
             return None
         return response.json()
+
+    def _retry_delay(self, response: httpx.Response, attempt: int) -> float:
+        """Compute the next sleep duration in seconds.
+
+        For 429, honor `Retry-After` if present. Otherwise fall back to
+        exponential backoff: 2**attempt, capped at 30s.
+        """
+        if response.status_code == 429:
+            retry_after = _parse_retry_after(response.headers.get("Retry-After"))
+            if retry_after is not None:
+                return min(retry_after, 30.0)
+        return min(float(2**attempt), 30.0)
 
     def get(self, path: str, params: dict | None = None) -> dict | list | None:
         return self.request("GET", path, params=params)
