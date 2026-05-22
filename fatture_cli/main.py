@@ -18,8 +18,9 @@ from __future__ import annotations
 
 import datetime as _dt
 import sys
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, ParamSpec, TypeVar, cast
 
 import click
 import httpx
@@ -81,14 +82,22 @@ class CLIContext:
 
 pass_ctx = click.make_pass_decorator(CLIContext)
 
+P = ParamSpec("P")
+R = TypeVar("R")
 
-def common_flags(func):
+
+def common_flags(func: Callable[P, R]) -> Callable[P, R]:
     """Re-declare the root `--json` / `--verbose` flags on a subcommand.
 
     Click only consumes options at the level where they are declared, so
     `fatture list invoices --json` would otherwise fail with "No such option".
     We accept the flags here too and promote them onto the shared CLIContext
     so the position of `--json` no longer matters.
+
+    The wrapper preserves the wrapped function's parameter spec; the two
+    Click-injected extras ``_local_json`` / ``_local_verbose`` are pulled out
+    of ``kwargs`` before delegating, so callers of the wrapped function still
+    see the original signature.
     """
     import functools
 
@@ -97,12 +106,14 @@ def common_flags(func):
     @click.option("--verbose", "_local_verbose", is_flag=True, default=False,
                   help="Log HTTP requests and timings to stderr.")
     @functools.wraps(func)
-    def wrapper(*args, _local_json: bool, _local_verbose: bool, **kwargs):
+    def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
+        local_json = bool(kwargs.pop("_local_json", False))
+        local_verbose = bool(kwargs.pop("_local_verbose", False))
         cli_ctx = click.get_current_context().find_object(CLIContext)
         if cli_ctx is not None:
-            if _local_json:
+            if local_json:
                 cli_ctx.as_json = True
-            if _local_verbose:
+            if local_verbose:
                 cli_ctx.verbose = True
         return func(*args, **kwargs)
 
@@ -552,7 +563,7 @@ def _update_invoice(ctx: CLIContext, invoice_id: int, status: str) -> None:
 
         path = INVOICE_DETAIL.format(company_id=company_id, document_id=invoice_id)
         try:
-            payload = client.put(path, json=body) or {}
+            payload = client.put_resource(path, json=body)
         except APIError as exc:
             error(exc.message)
             sys.exit(1)
@@ -624,14 +635,14 @@ def _fetch_invoice_raw(client: APIClient, company_id: int, invoice_id: int) -> d
     return payload.get("data") or {}
 
 
-def _fetch_active_company(client: APIClient, company_id: int) -> dict:
+def _fetch_active_company(client: APIClient, company_id: int) -> dict[str, Any]:
     """Return the active company dict from /user/companies (matching company_id)."""
     payload = client.get_resource(USER_COMPANIES)
     companies = (payload.get("data") or {}).get("companies") or []
     for c in companies:
         if int(c.get("id") or 0) == company_id:
-            return c
-    return companies[0] if companies else {}
+            return cast("dict[str, Any]", c)
+    return cast("dict[str, Any]", companies[0]) if companies else {}
 
 
 @export.command("invoice", help="Export an invoice as FatturaPA v1.2.3 XML.")

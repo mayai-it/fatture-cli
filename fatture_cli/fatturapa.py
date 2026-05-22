@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from lxml import etree
 
@@ -352,8 +352,11 @@ def build_fattura_xml(invoice: dict, company: dict) -> str:
 
     _build_dati_pagamento(body, invoice.get("payments_list") or [])
 
-    xml_bytes = etree.tostring(
-        root, xml_declaration=True, encoding="UTF-8", pretty_print=True
+    # etree.tostring is untyped (no lxml stubs in our config); cast to bytes
+    # so .decode() returns a concrete str instead of Any.
+    xml_bytes = cast(
+        bytes,
+        etree.tostring(root, xml_declaration=True, encoding="UTF-8", pretty_print=True),
     )
     return xml_bytes.decode("utf-8")
 

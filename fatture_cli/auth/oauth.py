@@ -21,6 +21,7 @@ import urllib.parse
 import webbrowser
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
+from typing import Any
 
 import httpx
 
@@ -145,7 +146,7 @@ class _CallbackHandler(http.server.BaseHTTPRequestHandler):
             )
         self.wfile.write(body.encode("utf-8"))
 
-    def log_message(self, format: str, *args) -> None:  # noqa: A002
+    def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
         # Silence the default stderr logging of the dev server.
         return
 

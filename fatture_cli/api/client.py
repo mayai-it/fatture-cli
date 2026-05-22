@@ -10,7 +10,8 @@ Handles:
 from __future__ import annotations
 
 import time
-from typing import TYPE_CHECKING, Any
+from types import TracebackType
+from typing import TYPE_CHECKING, Any, cast
 
 import httpx
 
@@ -103,7 +104,12 @@ class APIClient:
     def __enter__(self) -> APIClient:
         return self
 
-    def __exit__(self, *exc) -> None:
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
         self.close()
 
     def close(self) -> None:
@@ -197,7 +203,9 @@ class APIClient:
 
         if response.status_code == 204 or not response.content:
             return None
-        return response.json()
+        # httpx.Response.json() is typed as Any. The FiC API always returns a
+        # JSON object or array at top level — cast accordingly.
+        return cast("dict[str, Any] | list[Any]", response.json())
 
     def _retry_delay(self, response: httpx.Response, attempt: int) -> float:
         """Compute the next sleep duration in seconds.
@@ -263,6 +271,17 @@ class APIClient:
 
     def put(self, path: str, json: Any = None) -> dict | list | None:
         return self.request("PUT", path, json=json)
+
+    def put_resource(self, path: str, json: Any = None) -> dict[str, Any]:
+        """PUT expecting a single-resource response (top-level dict). See ``get_resource``."""
+        result = self.request("PUT", path, json=json)
+        if not isinstance(result, dict):
+            raise APIError(
+                0,
+                f"Expected dict response, got {type(result).__name__}",
+                result,
+            )
+        return result
 
     def delete(self, path: str) -> dict | list | None:
         return self.request("DELETE", path)
