@@ -171,9 +171,20 @@ def test_build_client_create_body_drops_empty_optionals():
     assert body["data"] == {"name": "Solo Name", "type": "company"}
 
 
-def test_build_invoice_update_body_only_touches_payment_status():
-    body = build_invoice_update_body("paid")
+def test_build_invoice_update_body_only_includes_passed_fields():
+    # Delta-mode: only keyword args present in the call land in `data`.
+    body = build_invoice_update_body(payment_status="paid")
     assert body == {"data": {"payment_status": "paid"}}
+
+
+def test_build_invoice_update_body_drops_none_fields():
+    # A CLI flag left unset must NOT clobber a server-side value.
+    body = build_invoice_update_body(payment_status="paid", notes=None, number=42)
+    assert body == {"data": {"payment_status": "paid", "number": 42}}
+
+
+def test_build_invoice_update_body_empty_when_no_kwargs():
+    assert build_invoice_update_body() == {"data": {}}
 
 
 def test_summarize_created_invoice_combines_number_and_numeration():

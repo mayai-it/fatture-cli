@@ -46,6 +46,7 @@ from fatture_cli.auth.oauth import DEFAULT_CALLBACK_PORT
 from fatture_cli.output import emit, error
 from fatture_cli.transforms.client import (
     build_client_create_body,
+    build_client_update_body,
     detail_client,
     summarize_client,
 )
@@ -53,9 +54,12 @@ from fatture_cli.transforms.invoice import (
     build_invoice_create_body,
     build_invoice_query,
     build_invoice_update_body,
+    build_mark_paid_body,
+    build_send_invoice_email_body,
     detail_invoice,
     is_overdue,
     summarize_created_invoice,
+    summarize_ei_status,
     summarize_invoice,
 )
 from fatture_cli.transforms.product import summarize_product
@@ -543,18 +547,45 @@ def _create_client(
     emit({"id": data.get("id"), "name": data.get("name")}, as_json=ctx.as_json)
 
 
-@update.command("invoice", help="Update an invoice's payment status.")
+@update.command("invoice", help="Update an existing invoice (delta — only passed fields).")
 @click.argument("invoice_id", type=int)
 @click.option(
     "--status",
-    required=True,
-    type=click.Choice(["paid", "not_paid"]),
-    help="New payment status.",
+    type=click.Choice(["paid", "not_paid", "partially_paid"]),
+    help="Payment status.",
 )
+@click.option("--date", help="Issue date (YYYY-MM-DD).")
+@click.option("--number", type=int, help="Document number.")
+@click.option("--notes", help="Internal notes (not visible on the PDF).")
+@click.option("--visible-subject", help="Subject visible on the document.")
 @common_flags
 @pass_ctx
-def _update_invoice(ctx: CLIContext, invoice_id: int, status: str) -> None:
-    body = build_invoice_update_body(status)
+def _update_invoice(
+    ctx: CLIContext,
+    invoice_id: int,
+    status: str | None,
+    date: str | None,
+    number: int | None,
+    notes: str | None,
+    visible_subject: str | None,
+) -> None:
+    fields: dict[str, Any] = {}
+    if status is not None:
+        fields["payment_status"] = status
+    if date is not None:
+        fields["date"] = date
+    if number is not None:
+        fields["number"] = number
+    if notes is not None:
+        fields["notes"] = notes
+    if visible_subject is not None:
+        fields["visible_subject"] = visible_subject
+
+    if not fields:
+        error("update invoice: at least one field option is required")
+        sys.exit(1)
+
+    body = build_invoice_update_body(**fields)
     with ctx.require_client() as client:
         company_id = client.credentials.company_id
         if not company_id:
@@ -565,14 +596,29 @@ def _update_invoice(ctx: CLIContext, invoice_id: int, status: str) -> None:
         try:
             payload = client.put_resource(path, json=body)
         except APIError as exc:
-            error(exc.message)
+            _handle_update_error(exc)
             sys.exit(1)
 
     data = payload.get("data") or {}
     emit(
-        {"id": data.get("id") or invoice_id, "payment_status": status},
+        {"id": data.get("id") or invoice_id, "updated_fields": list(fields)},
         as_json=ctx.as_json,
     )
+
+
+def _handle_update_error(exc: APIError) -> None:
+    """Surface a sharper message when a 4xx hints at SDI-sent immutability."""
+    msg = exc.message or ""
+    if exc.status_code in (400, 409, 422) and (
+        "sent" in msg.lower() or "sdi" in msg.lower() or "e-invoice" in msg.lower()
+    ):
+        error(
+            f"{msg}\n"
+            "hint: invoices already transmitted to SDI cannot be modified. "
+            "Issue a credit note (nota di credito, TipoDocumento TD04) instead.",
+        )
+    else:
+        error(msg)
 
 
 @search.command("clients", help="Search clients by free-text name match.")
@@ -710,6 +756,282 @@ def _validate_invoice(ctx: CLIContext, invoice_id: int) -> None:
 
     emit({"valid": False, "errors": errors}, as_json=ctx.as_json)
     sys.exit(1)
+
+
+# ---------------------------------------------------------------------------
+# update client
+# ---------------------------------------------------------------------------
+
+
+@update.command("client", help="Update an existing client (delta — only passed fields).")
+@click.argument("client_id", type=int)
+@click.option("--name", help="Client display name.")
+@click.option("--email", help="Primary email.")
+@click.option("--certified-email", help="Certified email (PEC).")
+@click.option("--phone", help="Phone number.")
+@click.option("--vat-number", help="VAT number (e.g. IT01234567890).")
+@click.option("--tax-code", help="Codice fiscale.")
+@click.option("--address-street", help="Street address.")
+@click.option("--address-postal-code", help="Postal code (CAP).")
+@click.option("--address-city", help="City.")
+@click.option("--address-province", help="Province code (e.g. RM, MI).")
+@click.option("--notes", help="Internal notes.")
+@common_flags
+@pass_ctx
+def _update_client(
+    ctx: CLIContext,
+    client_id: int,
+    name: str | None,
+    email: str | None,
+    certified_email: str | None,
+    phone: str | None,
+    vat_number: str | None,
+    tax_code: str | None,
+    address_street: str | None,
+    address_postal_code: str | None,
+    address_city: str | None,
+    address_province: str | None,
+    notes: str | None,
+) -> None:
+    fields: dict[str, Any] = {
+        k: v
+        for k, v in {
+            "name": name,
+            "email": email,
+            "certified_email": certified_email,
+            "phone": phone,
+            "vat_number": vat_number,
+            "tax_code": tax_code,
+            "address_street": address_street,
+            "address_postal_code": address_postal_code,
+            "address_city": address_city,
+            "address_province": address_province,
+            "notes": notes,
+        }.items()
+        if v is not None
+    }
+
+    if not fields:
+        error("update client: at least one field option is required")
+        sys.exit(1)
+
+    body = build_client_update_body(**fields)
+    with ctx.require_client() as client:
+        company_id = client.credentials.company_id
+        if not company_id:
+            error("no active company — run `fatture auth login` again")
+            sys.exit(2)
+
+        path = CLIENT_DETAIL.format(company_id=company_id, client_id=client_id)
+        try:
+            payload = client.put_resource(path, json=body)
+        except APIError as exc:
+            error(exc.message)
+            sys.exit(1)
+
+    data = payload.get("data") or {}
+    emit(
+        {"id": data.get("id") or client_id, "updated_fields": list(fields)},
+        as_json=ctx.as_json,
+    )
+
+
+# ---------------------------------------------------------------------------
+# mark-paid invoice
+# ---------------------------------------------------------------------------
+
+
+@cli.group(name="mark-paid", help="Shortcut: mark a resource as paid.")
+def mark_paid() -> None: ...
+
+
+@mark_paid.command("invoice", help="Mark an invoice as paid (sets payment_status=paid).")
+@click.argument("invoice_id", type=int)
+@click.option(
+    "--date",
+    "paid_date",
+    help="Date of payment (YYYY-MM-DD). Defaults to today. Note: this updates "
+    "the document-level payment_status only and does not record an actual "
+    "cash/bank movement.",
+)
+@common_flags
+@pass_ctx
+def _mark_paid_invoice(
+    ctx: CLIContext, invoice_id: int, paid_date: str | None
+) -> None:
+    effective_date = paid_date or _dt.date.today().isoformat()
+    body = build_mark_paid_body(paid_date=effective_date)
+
+    with ctx.require_client() as client:
+        company_id = client.credentials.company_id
+        if not company_id:
+            error("no active company — run `fatture auth login` again")
+            sys.exit(2)
+
+        path = INVOICE_DETAIL.format(company_id=company_id, document_id=invoice_id)
+        try:
+            payload = client.put_resource(path, json=body)
+        except APIError as exc:
+            _handle_update_error(exc)
+            sys.exit(1)
+
+    data = payload.get("data") or {}
+    emit(
+        {"id": data.get("id") or invoice_id, "payment_status": "paid", "paid_date": effective_date},
+        as_json=ctx.as_json,
+    )
+
+
+# ---------------------------------------------------------------------------
+# send invoice (email)
+# ---------------------------------------------------------------------------
+
+
+@cli.group(help="Send a resource (email, etc.).")
+def send() -> None: ...
+
+
+@send.command("invoice", help="Email an invoice to a recipient.")
+@click.argument("invoice_id", type=int)
+@click.option("--to", "to_email", required=True, help="Recipient email.")
+@click.option(
+    "--from",
+    "from_email",
+    help="Sender email. If omitted, FiC uses the company default sender.",
+)
+@click.option("--subject", help="Custom subject (otherwise FiC default).")
+@click.option("--body", "body_text", help="Custom body text.")
+@click.option(
+    "--attach-pdf/--no-attach-pdf",
+    default=True,
+    help="Attach the invoice PDF to the email (default: yes).",
+)
+@common_flags
+@pass_ctx
+def _send_invoice_email(
+    ctx: CLIContext,
+    invoice_id: int,
+    to_email: str,
+    from_email: str | None,
+    subject: str | None,
+    body_text: str | None,
+    attach_pdf: bool,
+) -> None:
+    body = build_send_invoice_email_body(
+        recipient_email=to_email,
+        sender_email=from_email,
+        subject=subject,
+        body=body_text,
+        attach_pdf=attach_pdf,
+    )
+
+    with ctx.require_client() as client:
+        company_id = client.credentials.company_id
+        if not company_id:
+            error("no active company — run `fatture auth login` again")
+            sys.exit(2)
+
+        path = f"/c/{company_id}/issued_documents/{invoice_id}/email"
+        try:
+            payload = client.post_resource(path, json=body)
+        except APIError as exc:
+            error(exc.message)
+            sys.exit(1)
+
+    data = payload.get("data") or {}
+    emit(
+        {
+            "scheduled": True,
+            "invoice_id": invoice_id,
+            "recipient": to_email,
+            "response": data or None,
+        },
+        as_json=ctx.as_json,
+    )
+
+
+# ---------------------------------------------------------------------------
+# ei-status invoice (diagnostic — no transmission)
+# ---------------------------------------------------------------------------
+
+
+@cli.group(name="ei-status", help="Diagnose e-invoice / SDI transmission status.")
+def ei_status() -> None: ...
+
+
+@ei_status.command("invoice", help="Inspect an invoice's SDI transmission state.")
+@click.argument("invoice_id", type=int)
+@common_flags
+@pass_ctx
+def _ei_status_invoice(ctx: CLIContext, invoice_id: int) -> None:
+    with ctx.require_client() as client:
+        company_id = client.credentials.company_id
+        if not company_id:
+            error("no active company — run `fatture auth login` again")
+            sys.exit(2)
+
+        path = INVOICE_DETAIL.format(company_id=company_id, document_id=invoice_id)
+        try:
+            payload = client.get_resource(path, params={"type": "invoice"})
+        except APIError as exc:
+            error(exc.message)
+            sys.exit(1)
+
+    emit(summarize_ei_status(payload.get("data") or {}), as_json=ctx.as_json)
+
+
+# ---------------------------------------------------------------------------
+# export-pdf invoice
+# ---------------------------------------------------------------------------
+
+
+@cli.group(name="export-pdf", help="Download a resource as PDF.")
+def export_pdf() -> None: ...
+
+
+@export_pdf.command("invoice", help="Download an invoice PDF to a local file.")
+@click.argument("invoice_id", type=int)
+@click.option(
+    "--output",
+    "output_path",
+    help="Output file path. Defaults to invoice_<id>.pdf in the current directory.",
+)
+@common_flags
+@pass_ctx
+def _export_pdf_invoice(
+    ctx: CLIContext, invoice_id: int, output_path: str | None
+) -> None:
+    with ctx.require_client() as client:
+        company_id = client.credentials.company_id
+        if not company_id:
+            error("no active company — run `fatture auth login` again")
+            sys.exit(2)
+
+        path = INVOICE_DETAIL.format(company_id=company_id, document_id=invoice_id)
+        try:
+            payload = client.get_resource(path, params={"type": "invoice"})
+        except APIError as exc:
+            error(exc.message)
+            sys.exit(1)
+
+        invoice_data = payload.get("data") or {}
+        pdf_url = invoice_data.get("url")
+        if not pdf_url:
+            error(
+                "invoice has no downloadable PDF "
+                "(the API response did not include a 'url' field)"
+            )
+            sys.exit(1)
+
+        try:
+            pdf_bytes = client.get_binary_url(pdf_url)
+        except APIError as exc:
+            error(f"PDF download failed: {exc.message}")
+            sys.exit(1)
+
+    target = output_path or f"invoice_{invoice_id}.pdf"
+    Path(target).write_bytes(pdf_bytes)
+    emit({"saved": target, "size_bytes": len(pdf_bytes)}, as_json=ctx.as_json)
 
 
 if __name__ == "__main__":

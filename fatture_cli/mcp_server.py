@@ -10,12 +10,14 @@ Diagnostics (if any) must go to stderr via `logging`.
 
 from __future__ import annotations
 
+import base64
 import datetime as _dt
 import logging
 import sys
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from typing import Any
 
 from mcp.server.fastmcp import Context, FastMCP
 from mcp.server.fastmcp.exceptions import ToolError
@@ -29,14 +31,19 @@ from fatture_cli.api.endpoints import (
 from fatture_cli.auth import load_credentials
 from fatture_cli.transforms.client import (
     build_client_create_body,
+    build_client_update_body,
     summarize_client,
 )
 from fatture_cli.transforms.invoice import (
     build_invoice_create_body,
     build_invoice_query,
+    build_invoice_update_body,
+    build_mark_paid_body,
+    build_send_invoice_email_body,
     detail_invoice,
     is_overdue,
     summarize_created_invoice,
+    summarize_ei_status,
     summarize_invoice,
 )
 
@@ -246,6 +253,217 @@ def fatture_auth_status(ctx: Context) -> dict:
         "expires_at": creds.expires_at,
         "expired": creds.is_expired,
     }
+
+
+# ---------------------------------------------------------------------------
+# Write tools (added in 0.3.0)
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+def update_invoice(
+    ctx: Context,
+    invoice_id: int,
+    payment_status: str | None = None,
+    date: str | None = None,
+    number: int | None = None,
+    notes: str | None = None,
+    visible_subject: str | None = None,
+) -> dict[str, Any]:
+    """Update an existing invoice. Pass only the fields you want to change
+    (delta mode); fields left as None stay untouched on the server.
+
+    IMPORTANT: invoices already transmitted to SDI cannot be modified.
+    The API will return 4xx; check `get_invoice_ei_status` first if unsure.
+    """
+    client, company_id = _require(ctx)
+    fields: dict[str, Any] = {
+        k: v
+        for k, v in {
+            "payment_status": payment_status,
+            "date": date,
+            "number": number,
+            "notes": notes,
+            "visible_subject": visible_subject,
+        }.items()
+        if v is not None
+    }
+    if not fields:
+        raise ToolError("update_invoice: at least one field must be specified")
+
+    body = build_invoice_update_body(**fields)
+    path = INVOICE_DETAIL.format(company_id=company_id, document_id=invoice_id)
+    try:
+        payload = client.put_resource(path, json=body)
+    except APIError as exc:
+        raise ToolError(exc.message) from exc
+    data = payload.get("data") or {}
+    return {"id": data.get("id") or invoice_id, "updated_fields": list(fields)}
+
+
+@mcp.tool()
+def mark_invoice_paid(
+    ctx: Context, invoice_id: int, paid_date: str | None = None
+) -> dict[str, Any]:
+    """Mark an invoice as paid. `paid_date` defaults to today (YYYY-MM-DD).
+
+    Note: this updates the document-level `payment_status` only — it does
+    NOT record an actual cash/bank movement against the company books.
+    """
+    client, company_id = _require(ctx)
+    effective_date = paid_date or _dt.date.today().isoformat()
+    body = build_mark_paid_body(paid_date=effective_date)
+    path = INVOICE_DETAIL.format(company_id=company_id, document_id=invoice_id)
+    try:
+        payload = client.put_resource(path, json=body)
+    except APIError as exc:
+        raise ToolError(exc.message) from exc
+    data = payload.get("data") or {}
+    return {
+        "id": data.get("id") or invoice_id,
+        "payment_status": "paid",
+        "paid_date": effective_date,
+    }
+
+
+@mcp.tool()
+def send_invoice_email(
+    ctx: Context,
+    invoice_id: int,
+    to_email: str,
+    from_email: str | None = None,
+    subject: str | None = None,
+    body: str | None = None,
+    attach_pdf: bool = True,
+) -> dict[str, Any]:
+    """Email an invoice to a recipient.
+
+    `from_email` is optional: if omitted, FiC uses the company's default
+    sender configured in the developer console. Returns the API confirmation.
+    """
+    client, company_id = _require(ctx)
+    payload_body = build_send_invoice_email_body(
+        recipient_email=to_email,
+        sender_email=from_email,
+        subject=subject,
+        body=body,
+        attach_pdf=attach_pdf,
+    )
+    path = f"/c/{company_id}/issued_documents/{invoice_id}/email"
+    try:
+        payload = client.post_resource(path, json=payload_body)
+    except APIError as exc:
+        raise ToolError(exc.message) from exc
+    return {
+        "scheduled": True,
+        "invoice_id": invoice_id,
+        "recipient": to_email,
+        "response": payload.get("data"),
+    }
+
+
+@mcp.tool()
+def get_invoice_pdf(ctx: Context, invoice_id: int) -> dict[str, Any]:
+    """Download an invoice PDF and return it as a base64 string.
+
+    The MCP transport is JSON, so the binary content is base64-encoded.
+    Agents save the file by base64-decoding `pdf_base64` and writing the
+    resulting bytes locally.
+    """
+    client, company_id = _require(ctx)
+    path = INVOICE_DETAIL.format(company_id=company_id, document_id=invoice_id)
+    try:
+        payload = client.get_resource(path, params={"type": "invoice"})
+    except APIError as exc:
+        raise ToolError(exc.message) from exc
+
+    data = payload.get("data") or {}
+    pdf_url = data.get("url")
+    if not pdf_url:
+        raise ToolError(
+            "invoice has no downloadable PDF (no 'url' field in API response)"
+        )
+    try:
+        pdf_bytes = client.get_binary_url(pdf_url)
+    except APIError as exc:
+        raise ToolError(f"PDF download failed: {exc.message}") from exc
+    return {
+        "invoice_id": invoice_id,
+        "size_bytes": len(pdf_bytes),
+        "pdf_base64": base64.b64encode(pdf_bytes).decode("ascii"),
+    }
+
+
+@mcp.tool()
+def get_invoice_ei_status(ctx: Context, invoice_id: int) -> dict[str, Any]:
+    """Inspect an invoice's e-invoice / SDI transmission state. Read-only.
+
+    Returns `ei_status` (one of: missing, not_sent, attempt, pending, sent,
+    rejected, ...), the `e_invoice` flag, and the populated subset of
+    `ei_data` (CodiceDestinatario etc.). Useful before attempting an update
+    or to diagnose why an invoice didn't reach SDI.
+
+    Note: Fatture in Cloud's REST API has no "send to SDI" endpoint —
+    transmission is triggered server-side when the invoice is created with
+    `e_invoice=true` and a valid recipient. This tool is diagnostic only.
+    """
+    client, company_id = _require(ctx)
+    path = INVOICE_DETAIL.format(company_id=company_id, document_id=invoice_id)
+    try:
+        payload = client.get_resource(path, params={"type": "invoice"})
+    except APIError as exc:
+        raise ToolError(exc.message) from exc
+    return summarize_ei_status(payload.get("data") or {})
+
+
+@mcp.tool()
+def update_client(
+    ctx: Context,
+    client_id: int,
+    name: str | None = None,
+    email: str | None = None,
+    certified_email: str | None = None,
+    phone: str | None = None,
+    vat_number: str | None = None,
+    tax_code: str | None = None,
+    address_street: str | None = None,
+    address_postal_code: str | None = None,
+    address_city: str | None = None,
+    address_province: str | None = None,
+    notes: str | None = None,
+) -> dict[str, Any]:
+    """Update an existing client. Pass only the fields you want to change
+    (delta mode); fields left as None stay untouched on the server.
+    """
+    client, company_id = _require(ctx)
+    fields: dict[str, Any] = {
+        k: v
+        for k, v in {
+            "name": name,
+            "email": email,
+            "certified_email": certified_email,
+            "phone": phone,
+            "vat_number": vat_number,
+            "tax_code": tax_code,
+            "address_street": address_street,
+            "address_postal_code": address_postal_code,
+            "address_city": address_city,
+            "address_province": address_province,
+            "notes": notes,
+        }.items()
+        if v is not None
+    }
+    if not fields:
+        raise ToolError("update_client: at least one field must be specified")
+
+    body = build_client_update_body(**fields)
+    path = f"/c/{company_id}/entities/clients/{client_id}"
+    try:
+        payload = client.put_resource(path, json=body)
+    except APIError as exc:
+        raise ToolError(exc.message) from exc
+    data = payload.get("data") or {}
+    return {"id": data.get("id") or client_id, "updated_fields": list(fields)}
 
 
 def main() -> None:

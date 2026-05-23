@@ -53,3 +53,14 @@ def build_client_create_body(
     if vat:
         data["vat_number"] = vat
     return {"data": data}
+
+
+def build_client_update_body(**patch_fields: Any) -> dict[str, Any]:
+    """Build the PUT body for ``update client``.
+
+    FiC's modify_client endpoint documents "First level parameters are
+    managed in delta mode" — partial updates are supported natively, so
+    we just drop ``None`` values and forward the rest.
+    """
+    data = {k: v for k, v in patch_fields.items() if v is not None}
+    return {"data": data}

@@ -64,6 +64,48 @@ Verify your client's config has:
 Find the path with `which fatture-mcp`. Restart the agent after editing
 the config.
 
+## How do I send an invoice to SDI / Agenzia delle Entrate?
+
+There is no `fatture send-sdi` command, and no MCP `send_invoice_sdi` tool,
+because Fatture in Cloud's public REST API doesn't expose a "send to SDI"
+endpoint. The transmission happens server-side when:
+
+1. The invoice was created with `e_invoice: true`.
+2. It has a valid recipient identifier — `CodiceDestinatario` (7-char SDI
+   code) or the recipient's PEC address.
+
+To check whether a given invoice has been transmitted (and to which state
+the SDI moved it), use:
+
+```bash
+fatture ei-status invoice <id>
+```
+
+This returns `ei_status` (one of `missing`, `not_sent`, `attempt`, `pending`,
+`sent`, `rejected`, ...), the `e_invoice` flag, and the populated
+`ei_data` fields. If `ei_status` is `not_sent` or `missing`, the most
+likely cause is incomplete `ei_data` on the invoice itself (no
+CodiceDestinatario, no PEC) — fix that via `fatture update invoice` and
+the server will re-attempt.
+
+## Can I un-send a fattura already transmitted to SDI?
+
+No. Once an invoice has `ei_status == "sent"` it's a legal fiscal act
+registered with Agenzia delle Entrate; deletion is not possible. The
+correct correction is a credit note (nota di credito, `TipoDocumento`
+TD04) that references the original invoice. Fatture in Cloud's UI offers
+this as a one-click operation; the CLI does not yet expose it (planned).
+
+## What's the difference between `mark-paid` and recording a payment?
+
+`fatture mark-paid invoice <id>` (and the equivalent
+`update invoice --status paid`) updates the document-level
+`payment_status` field in Fatture in Cloud. It is a label, not a
+bookkeeping operation: no cash movement is recorded, no bank account
+balance changes, no journal entry is created. If you also need to
+register the actual money movement (entrata in cassa / banca), do that
+separately in the Fatture in Cloud UI under Movimenti / Estratto conto.
+
 ## `fatture export invoice` produces XML — what next?
 
 The output is FatturaPA v1.2.3 (FPR12). Digital signature (`.p7m`) and

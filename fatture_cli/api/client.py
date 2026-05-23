@@ -285,3 +285,21 @@ class APIClient:
 
     def delete(self, path: str) -> dict | list | None:
         return self.request("DELETE", path)
+
+    def get_binary_url(self, url: str) -> bytes:
+        """Fetch a presigned URL and return raw bytes (e.g. invoice PDF).
+
+        FiC exposes invoice PDFs via a ``url`` field whose value is a
+        temporary signed URL on a separate CDN host. Sending the bearer
+        token to that host would leak the credential, so this method
+        intentionally bypasses the authenticated client and issues a
+        bare ``httpx.get`` instead. Follows redirects.
+        """
+        response = httpx.get(url, timeout=30.0, follow_redirects=True)
+        if response.status_code >= 400:
+            raise APIError(
+                response.status_code,
+                f"Binary download failed: {response.reason_phrase}",
+                None,
+            )
+        return response.content

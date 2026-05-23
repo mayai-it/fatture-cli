@@ -104,10 +104,15 @@ designed for terminal workflows or AI agents. `fatture-cli` is built for both:
 | `fatture list invoices [--year Y] [--status S] [--overdue] [--limit N]` | List issued invoices. |
 | `fatture get invoice <id>` | Fetch a single invoice with lines and payments. |
 | `fatture create invoice --client ID --product NAME --amount AMT --date YYYY-MM-DD` | Create a new invoice with a single line item. |
-| `fatture update invoice <id> --status paid\|not_paid` | Update payment status of an existing invoice. |
+| `fatture update invoice <id> [--status ... --date ... --notes ...]` | Patch fields on an invoice (delta mode). |
+| `fatture mark-paid invoice <id> [--date YYYY-MM-DD]` | Shortcut for `update --status paid`. |
+| `fatture send invoice <id> --to EMAIL [--from EMAIL] [--subject S] [--body B]` | Email the invoice to a recipient. |
+| `fatture export-pdf invoice <id> [--output FILE]` | Download the invoice PDF locally. |
+| `fatture ei-status invoice <id>` | Diagnostic: e-invoice / SDI transmission state (read-only). |
 | `fatture list clients [--limit N]` | List all clients. |
 | `fatture get client <id>` | Fetch a single client with address details. |
 | `fatture create client --name NAME [--email E] [--vat V]` | Create a new client. |
+| `fatture update client <id> [--name ... --email ... --address-street ...]` | Patch fields on a client. |
 | `fatture search clients <query>` | Search clients by name (`LIKE '%query%'`). |
 | `fatture list products [--limit N]` | List products / services. |
 | `fatture get product <id>` | Fetch a single product. |
@@ -124,6 +129,12 @@ HTTP timing on stderr, `-h` / `--help` per-command help.
 `payment_status` inside the `q` filter expression, so the CLI fetches the
 page server-side then drops rows where status is `paid` or no payment line
 is past-due.
+
+**Note on SDI transmission**: there is no `fatture send-sdi` command. The
+Fatture in Cloud REST API does not expose a "send to SDI" endpoint —
+transmission happens server-side when the invoice is created with
+`e_invoice: true` and a valid recipient (`CodiceDestinatario` or PEC).
+Use `fatture ei-status invoice <id>` to inspect the transmission state.
 
 ## Engineering notes
 
@@ -192,10 +203,16 @@ Find your path with `which fatture-mcp`.
 |------|-------------|
 | `fatture_list_invoices` | List invoices (year, status, overdue, limit). |
 | `fatture_get_invoice` | Get full invoice with lines and payments. |
+| `update_invoice` | Patch fields on an invoice (delta mode). |
+| `mark_invoice_paid` | Mark an invoice as paid; updates document-level status only. |
+| `send_invoice_email` | Email an invoice to a recipient. |
+| `get_invoice_pdf` | Download the PDF; returns base64-encoded bytes. |
+| `get_invoice_ei_status` | Diagnostic read of e-invoice / SDI transmission state. |
 | `fatture_list_clients` | List all clients. |
 | `fatture_search_clients` | Search clients by name. |
 | `fatture_create_invoice` | Create a new invoice. |
 | `fatture_create_client` | Create a new client. |
+| `update_client` | Patch fields on a client (delta mode). |
 | `fatture_auth_status` | Check authentication status. |
 
 ## FatturaPA XML

@@ -153,9 +153,75 @@ def build_invoice_create_body(
     }
 
 
-def build_invoice_update_body(status: str) -> dict[str, Any]:
-    """Build the PUT body for `update invoice --status`. Touches only payment_status."""
-    return {"data": {"payment_status": status}}
+def build_invoice_update_body(**patch_fields: Any) -> dict[str, Any]:
+    """Build the PUT body for ``update invoice``.
+
+    FiC's modify_issued_document endpoint operates in delta mode: only the
+    fields included in ``data`` are touched, the rest stay as-is. Callers
+    pass keyword arguments for every field they want to modify; ``None``
+    values are filtered out so a missing CLI flag never accidentally clears
+    a server-side value.
+    """
+    data = {k: v for k, v in patch_fields.items() if v is not None}
+    return {"data": data}
+
+
+def build_mark_paid_body(paid_date: str | None = None) -> dict[str, Any]:
+    """Build the PUT body for marking an invoice as paid.
+
+    Sets ``payment_status="paid"`` at the document level. ``paid_date`` is
+    accepted for future use (per-payment tracking would require fetching
+    payments_list first) but currently informational — the document-level
+    payment_status is what FiC's UI reflects.
+    """
+    fields: dict[str, Any] = {"payment_status": "paid"}
+    if paid_date:
+        fields["paid_date"] = paid_date
+    return build_invoice_update_body(**fields)
+
+
+def build_send_invoice_email_body(
+    recipient_email: str,
+    sender_email: str | None = None,
+    subject: str | None = None,
+    body: str | None = None,
+    attach_pdf: bool = True,
+) -> dict[str, Any]:
+    """Build the POST body for the schedule-email endpoint.
+
+    Matches FiC's ``ScheduleEmailRequest`` → ``data: EmailSchedule`` shape.
+    ``sender_email`` is optional: when omitted, FiC falls back to the
+    company's default sender configured in the developer console.
+    """
+    email: dict[str, Any] = {
+        "recipient_email": recipient_email,
+        "attach_pdf": attach_pdf,
+    }
+    if sender_email:
+        email["sender_email"] = sender_email
+    if subject:
+        email["subject"] = subject
+    if body:
+        email["body"] = body
+    return {"data": email}
+
+
+def summarize_ei_status(doc: dict[str, Any]) -> dict[str, Any]:
+    """Diagnostic summary of an invoice's e-invoice / SDI transmission state.
+
+    Returns only the fields relevant to "will this go to SDI? has it gone?"
+    without exposing the full IssuedDocument surface. Pure read-only — no
+    transmission, no mutation.
+    """
+    inv = Invoice.model_validate(doc)
+    ei_data_raw = doc.get("ei_data") if isinstance(doc.get("ei_data"), dict) else {}
+    return {
+        "id": inv.id,
+        "number": f"{inv.number}{inv.numeration}" if inv.numeration else inv.number,
+        "e_invoice": inv.e_invoice,
+        "ei_status": inv.ei_status,
+        "ei_data": {k: v for k, v in (ei_data_raw or {}).items() if v not in (None, "", [], {})},
+    }
 
 
 def summarize_created_invoice(doc: dict[str, Any]) -> dict[str, Any]:

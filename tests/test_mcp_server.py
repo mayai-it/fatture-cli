@@ -28,6 +28,12 @@ from fatture_cli.mcp_server import (
     fatture_list_clients,
     fatture_list_invoices,
     fatture_search_clients,
+    get_invoice_ei_status,
+    get_invoice_pdf,
+    mark_invoice_paid,
+    send_invoice_email,
+    update_client,
+    update_invoice,
 )
 
 DEFAULT_COMPANY_ID = 999
@@ -333,3 +339,143 @@ def test_tool_translates_apierror_into_tool_error() -> None:
 
     with pytest.raises(ToolError, match="not found"):
         fatture_get_invoice(_fake_ctx(client), invoice_id=999)
+
+
+# ---------------------------------------------------------------------------
+# Write tools (0.3.0)
+# ---------------------------------------------------------------------------
+
+
+def test_update_invoice_tool_sends_delta_body() -> None:
+    client = _make_client_mock()
+    client.put_resource.return_value = {"data": {"id": 42}}
+
+    out = update_invoice(
+        _fake_ctx(client), invoice_id=42, payment_status="paid", notes="ok"
+    )
+
+    body = client.put_resource.call_args.kwargs["json"]
+    assert body["data"] == {"payment_status": "paid", "notes": "ok"}
+    assert out["updated_fields"] == ["payment_status", "notes"]
+
+
+def test_update_invoice_tool_requires_at_least_one_field() -> None:
+    client = _make_client_mock()
+
+    with pytest.raises(ToolError, match="at least one field"):
+        update_invoice(_fake_ctx(client), invoice_id=42)
+    client.put_resource.assert_not_called()
+
+
+def test_mark_invoice_paid_tool_defaults_to_today() -> None:
+    client = _make_client_mock()
+    client.put_resource.return_value = {"data": {"id": 42}}
+
+    out = mark_invoice_paid(_fake_ctx(client), invoice_id=42)
+
+    body = client.put_resource.call_args.kwargs["json"]
+    assert body["data"]["payment_status"] == "paid"
+    assert len(body["data"]["paid_date"]) == 10
+    assert out["payment_status"] == "paid"
+
+
+def test_send_invoice_email_tool_builds_correct_body() -> None:
+    client = _make_client_mock()
+    client.post_resource.return_value = {"data": {"queued": True}}
+
+    out = send_invoice_email(
+        _fake_ctx(client),
+        invoice_id=42,
+        to_email="cliente@example.com",
+        subject="Fattura marzo",
+    )
+
+    body = client.post_resource.call_args.kwargs["json"]
+    assert body["data"]["recipient_email"] == "cliente@example.com"
+    assert body["data"]["subject"] == "Fattura marzo"
+    assert body["data"]["attach_pdf"] is True
+    assert out["scheduled"] is True
+
+
+def test_get_invoice_pdf_tool_returns_base64() -> None:
+    client = _make_client_mock()
+    client.get_resource.return_value = {
+        "data": {"id": 42, "date": "2026-01-15", "url": "https://cdn/x.pdf"}
+    }
+    client.get_binary_url.return_value = b"%PDF-1.4\nhello\n"
+
+    out = get_invoice_pdf(_fake_ctx(client), invoice_id=42)
+
+    assert out["invoice_id"] == 42
+    assert out["size_bytes"] == len(b"%PDF-1.4\nhello\n")
+    # Decoding the base64 must reproduce the bytes exactly.
+    import base64 as _b64
+    assert _b64.b64decode(out["pdf_base64"]) == b"%PDF-1.4\nhello\n"
+
+
+def test_get_invoice_pdf_tool_raises_when_no_url() -> None:
+    client = _make_client_mock()
+    client.get_resource.return_value = {"data": {"id": 42, "date": "2026-01-15"}}
+
+    with pytest.raises(ToolError, match="no downloadable PDF"):
+        get_invoice_pdf(_fake_ctx(client), invoice_id=42)
+    client.get_binary_url.assert_not_called()
+
+
+def test_get_invoice_ei_status_tool_returns_diagnostic_payload() -> None:
+    client = _make_client_mock()
+    client.get_resource.return_value = {
+        "data": {
+            "id": 42,
+            "date": "2026-01-15",
+            "number": 7,
+            "numeration": "/A",
+            "e_invoice": True,
+            "ei_status": "sent",
+            "ei_data": {"vat_kind": "I", "empty": ""},
+        }
+    }
+
+    out = get_invoice_ei_status(_fake_ctx(client), invoice_id=42)
+
+    assert out["ei_status"] == "sent"
+    assert out["e_invoice"] is True
+    assert out["number"] == "7/A"
+    assert "empty" not in out["ei_data"]
+
+
+def test_update_client_tool_sends_delta_body() -> None:
+    client = _make_client_mock()
+    client.put_resource.return_value = {"data": {"id": 7}}
+
+    out = update_client(
+        _fake_ctx(client), client_id=7, name="Acme S.r.l.", email="info@acme.it"
+    )
+
+    body = client.put_resource.call_args.kwargs["json"]
+    assert body["data"] == {"name": "Acme S.r.l.", "email": "info@acme.it"}
+    assert out["updated_fields"] == ["name", "email"]
+
+
+def test_update_client_tool_requires_at_least_one_field() -> None:
+    client = _make_client_mock()
+
+    with pytest.raises(ToolError, match="at least one field"):
+        update_client(_fake_ctx(client), client_id=7)
+
+
+def test_write_tools_raise_when_unauthenticated() -> None:
+    ctx = _fake_ctx(client=None, company_id=None)
+
+    with pytest.raises(ToolError, match="not authenticated"):
+        update_invoice(ctx, invoice_id=1, notes="x")
+    with pytest.raises(ToolError, match="not authenticated"):
+        mark_invoice_paid(ctx, invoice_id=1)
+    with pytest.raises(ToolError, match="not authenticated"):
+        send_invoice_email(ctx, invoice_id=1, to_email="x@y")
+    with pytest.raises(ToolError, match="not authenticated"):
+        get_invoice_pdf(ctx, invoice_id=1)
+    with pytest.raises(ToolError, match="not authenticated"):
+        get_invoice_ei_status(ctx, invoice_id=1)
+    with pytest.raises(ToolError, match="not authenticated"):
+        update_client(ctx, client_id=1, name="x")
