@@ -1,3 +1,9 @@
+<!--
+This file contains instructions for Claude Code agents working on this
+repository. It is publicly visible for transparency about how AI tools
+are used in development. Not required reading for users or contributors.
+-->
+
 # fatture-cli — Istruzioni specifiche
 
 ## Cosa fa
